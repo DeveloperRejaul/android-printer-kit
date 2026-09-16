@@ -18,7 +18,7 @@ Most ESC/POS printer libraries only send raw text or a single pre-made image. Th
 - **Persistent connection**: printer stays connected even if the app is swiped away from Recents, via a foreground `BluetoothPrinterService`.
 - **Auto-reconnect**: remembers the last connected printer and reconnects automatically the next time the app starts.
 - **Banded raster printing**: images are sent in small, paced chunks — many cheap ESC/POS boards silently drop large single print commands, and banding avoids that.
-- **Permission helpers**: `BluetoothPermissions` wraps the Android 12+ `BLUETOOTH_CONNECT` runtime permission so you don't have to handle version checks yourself.
+- **Permission helpers**: `BluetoothPermissions` wraps the Android 12+ `BLUETOOTH_CONNECT` and Android 13+ `POST_NOTIFICATIONS` runtime permissions so you don't have to handle version checks yourself.
 
 ## Scope
 
@@ -51,7 +51,7 @@ dependencies {
 
 ### 3. Permissions
 
-Nothing to add manually — `BLUETOOTH`, `BLUETOOTH_ADMIN`, `BLUETOOTH_CONNECT`, `FOREGROUND_SERVICE`, and `FOREGROUND_SERVICE_CONNECTED_DEVICE` are declared in the library's own manifest and merge automatically into your app. You still need to request the runtime `BLUETOOTH_CONNECT` permission on Android 12+ — see [Permissions](#permissions) below.
+Nothing to add manually — `BLUETOOTH`, `BLUETOOTH_ADMIN`, `BLUETOOTH_CONNECT`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_CONNECTED_DEVICE`, and `POST_NOTIFICATIONS` are declared in the library's own manifest and merge automatically into your app. You still need to request the runtime `BLUETOOTH_CONNECT` (Android 12+) and `POST_NOTIFICATIONS` (Android 13+) permissions at runtime — see [Permissions](#permissions) below.
 
 ## Quick start
 
@@ -115,16 +115,16 @@ A foreground `Service` that owns a `BluetoothPrinter` instance so the connection
 
 ### `BluetoothPermissions`
 
-Runtime permission helpers for the Android 12+ `BLUETOOTH_CONNECT` permission.
+Runtime permission helpers. Two independent grants are involved: `BLUETOOTH_CONNECT` (Android 12+) actually gates connecting/printing; `POST_NOTIFICATIONS` (Android 13+) only controls whether `BluetoothPrinterService`'s "printer connected" notification is *visible* — the foreground service still runs, and the connection still survives the app being swiped from Recents, without it.
 
 | Function | Description |
 |---|---|
-| `isGranted(context: Context): Boolean` | Whether Bluetooth permission is already granted (always `true` below Android 12). |
-| `getRequiredPermissions(): Array<String>` | The permission(s) this device's Android version actually needs (empty below Android 12). |
-| `request(activity: Activity, requestCode: Int = REQUEST_CODE)` | Shows the system permission dialog via the classic `ActivityCompat` API — for hosts not using `ActivityResultContracts`. |
-| `isGrantResult(requestCode: Int, grantResults: IntArray, expectedRequestCode: Int = REQUEST_CODE): Boolean` | Call from `onRequestPermissionsResult` to read the outcome of `request()`. |
+| `isGranted(context: Context): Boolean` | Whether `BLUETOOTH_CONNECT` specifically is granted (always `true` below Android 12) — the permission that actually gates connect/print. |
+| `getRequiredPermissions(): Array<String>` | Every permission this device's Android version needs for the full experience — `BLUETOOTH_CONNECT` (12+) and `POST_NOTIFICATIONS` (13+) — so a single request covers both. |
+| `request(activity: Activity, requestCode: Int = REQUEST_CODE)` | Shows the system permission dialog(s) for `getRequiredPermissions()` via the classic `ActivityCompat` API — for hosts not using `ActivityResultContracts`. |
+| `isGrantResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray, expectedRequestCode: Int = REQUEST_CODE): Boolean` | Call from `onRequestPermissionsResult` (forward all three of its arguments) to read the outcome of `request()` — keys off `BLUETOOTH_CONNECT`'s result specifically, so a denied `POST_NOTIFICATIONS` alone doesn't count as failure. |
 
-If your Activity is a `ComponentActivity`, prefer `registerForActivityResult(ActivityResultContracts.RequestPermission())` with `BluetoothPermissions.isGranted()`/`getRequiredPermissions()` for the check — mixing both permission mechanisms in the same Activity is unreliable.
+If your Activity is a `ComponentActivity`, prefer `registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions())` with `BluetoothPermissions.getRequiredPermissions()` for the check — mixing both permission mechanisms in the same Activity is unreliable, and `RequestPermission()` (singular) only requests one permission, silently skipping the rest when `getRequiredPermissions()` returns more than one.
 
 ### Data types
 
