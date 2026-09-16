@@ -1,0 +1,151 @@
+# PrinterKit
+
+[![Release](https://img.shields.io/github/v/release/DeveloperRejaul/printer-kit)](https://github.com/DeveloperRejaul/printer-kit)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+A professional Android library for talking to Bluetooth POS/thermal (ESC/POS) printers directly from your app — no third-party printer app required. It connects over Bluetooth Classic (SPP), keeps that connection alive in the background via a foreground service, and can print raw text, images, PDFs, and full **HTML content — including non-Latin scripts like Bangla** that ESC/POS printer fonts don't support natively.
+
+## Why this exists
+
+Most ESC/POS printer libraries only send raw text or a single pre-made image. They can't render real content — an actual HTML/CSS receipt layout, a PDF, or text in a script the printer's built-in font doesn't have (Bangla, Arabic, Hindi, etc.). PrinterKit solves that by rendering your HTML/PDF to a bitmap on-device (using Android's own `WebView` and `PdfRenderer` — no external rendering library) and sending it to the printer as a dithered ESC/POS raster image.
+
+## Features
+
+- **Direct Bluetooth Classic (SPP) connection** to any paired ESC/POS printer — no OS print dialog, no third-party printer app.
+- **HTML → PDF → print** pipeline, so you can print an actual styled receipt/report, not just plain text.
+- **PDF → image → print** pipeline using Android's built-in `PdfRenderer` (no external dependency).
+- **Non-Latin text support** (Bangla and others) via image-based rendering, bypassing ESC/POS's font limitations.
+- **Persistent connection**: printer stays connected even if the app is swiped away from Recents, via a foreground `BluetoothPrinterService`.
+- **Auto-reconnect**: remembers the last connected printer and reconnects automatically the next time the app starts.
+- **Banded raster printing**: images are sent in small, paced chunks — many cheap ESC/POS boards silently drop large single print commands, and banding avoids that.
+- **Permission helpers**: `BluetoothPermissions` wraps the Android 12+ `BLUETOOTH_CONNECT` runtime permission so you don't have to handle version checks yourself.
+
+## Scope
+
+This library speaks **Bluetooth Classic SPP + ESC/POS** — the standard used by virtually all budget Bluetooth receipt/thermal printers. It does **not** currently support Bluetooth LE printers, WiFi/network printers, USB-connected printers, or non-ESC/POS protocols (PCL/PostScript inkjet & laser printers). The library's structure keeps room for additional transports later, but only Bluetooth ESC/POS is implemented today.
+
+## Installation
+
+### 1. Add the JitPack repository
+
+In your root `settings.gradle.kts`:
+
+```kotlin
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+        maven { url = uri("https://jitpack.io") }
+    }
+}
+```
+
+### 2. Add the dependency
+
+```kotlin
+dependencies {
+    implementation("com.github.DeveloperRejaul:printerkit:v0.0.1")
+}
+```
+
+### 3. Permissions
+
+Nothing to add manually — `BLUETOOTH`, `BLUETOOTH_ADMIN`, `BLUETOOTH_CONNECT`, `FOREGROUND_SERVICE`, and `FOREGROUND_SERVICE_CONNECTED_DEVICE` are declared in the library's own manifest and merge automatically into your app. You still need to request the runtime `BLUETOOTH_CONNECT` permission on Android 12+ — see [Permissions](#permissions) below.
+
+## Quick start
+
+```kotlin
+// 1. Bind BluetoothPrinterService so the connection survives your app being
+//    swiped from Recents (see "Persistent connection" below for why this matters).
+val serviceIntent = Intent(this, BluetoothPrinterService::class.java)
+startService(serviceIntent)
+bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
+
+// 2. Once bound, list paired printers and connect to one
+val printers = service.printer.getBondedBluetoothPrinters()
+service.connectAndKeepAlive(printers.first().address)
+
+// 3. Print
+service.printer.printText("Hello from PrinterKit")
+
+// or print a full HTML receipt (Bangla, styling, everything):
+service.printer.printHtml(myReceiptHtml) { success ->
+    // called on a background thread
+}
+```
+
+## API reference
+
+### `BluetoothPrinter`
+
+The core class. Construct with `BluetoothPrinter(context)`, or — recommended — use the one already owned by `BluetoothPrinterService` (`service.printer`) so the connection persists in the background.
+
+All connection and print calls do blocking I/O and must be called from a background thread, except where noted.
+
+| Function | Description |
+|---|---|
+| `getBondedBluetoothPrinters(): List<BluetoothPrinterDevice>` | Lists Bluetooth devices already paired via Android's own Bluetooth settings. |
+| `connectPrinter(address: String): Boolean` | Opens an RFCOMM/SPP socket to the paired device. Closes any existing connection first. Remembers the address for `autoConnectIfAvailable()`. |
+| `autoConnectIfAvailable(): Boolean` | Reconnects to the last successfully connected printer, if any. Called automatically by `BluetoothPrinterService` on startup. |
+| `disconnectPrinter()` | Closes the connection and forgets the remembered address. |
+| `isConnectedPrinter(): Boolean` | Whether a printer socket is currently open. |
+| `getConnectedPrinter(): BluetoothPrinterDevice?` | The currently connected device, or `null`. |
+| `printText(text: String, feedLines: Int = 3)` | Sends raw text using the printer's built-in font. **ASCII only** — not for Bangla or other non-Latin scripts. |
+| `printImageBitmap(bitmap: Bitmap, printerWidthDots: Int = 384, feedLines: Int = 3)` | Prints a `Bitmap` as a dithered ESC/POS raster image, sent in paced bands for reliability on cheap boards. |
+| `printImageFile(imagePath: String, printerWidthDots: Int = 384, feedLines: Int = 3)` | Decodes an image file and prints it. |
+| `printImageBase64(base64: String, printerWidthDots: Int = 384, feedLines: Int = 3)` | Decodes a base64-encoded image and prints it. |
+| `pdfToImage(pdfPath: String, imageType: PrinterImageType = PNG, page: Int = 0, targetWidthPx: Int? = null, outputDir: String = context.cacheDir): String` | Renders one PDF page to an image file (via Android's `PdfRenderer`) and returns its path. |
+| `printPdf(pdfPath: String, printerWidthDots: Int = 384, page: Int = 0, feedLines: Int = 3)` | `pdfToImage` + print, in one call. |
+| `htmlToPdf(html: String, outputPath: String = ..., pageWidthDp: Int = 412, heightDp: Int? = null, minPageHeightDp: Int = 1000, onResult: (String?) -> Unit)` | Renders HTML to a PDF file using an off-screen `WebView` (no external library). **Must be called from any thread — it hops to the main thread internally; `onResult` always fires on the main thread.** |
+| `printHtml(html: String, printerWidthDots: Int = 384, pageWidthDp: Int = 412, heightDp: Int? = null, minPageHeightDp: Int = 1000, onResult: (Boolean) -> Unit = {})` | Full pipeline: `htmlToPdf` → `printPdf`. `onResult` fires on a background thread. |
+
+**HTML sizing parameters** (`pageWidthDp`, `heightDp`, `minPageHeightDp`): `pageWidthDp` controls how large your HTML's content renders (like a CSS viewport width), independent of the final printed width (`printerWidthDots` downscales to that). Leave `heightDp` unset to auto-measure your HTML's real content height (recommended); set it to force an exact page height instead.
+
+### `BluetoothPrinterService`
+
+A foreground `Service` that owns a `BluetoothPrinter` instance so the connection survives the app being swiped away from Recents. Bind to it and use `service.printer` for everything except connect/disconnect, which go through the service so it can promote/demote itself to foreground:
+
+| Member | Description |
+|---|---|
+| `printer: BluetoothPrinter` | The shared printer instance — use this for `printText`, `printHtml`, etc. |
+| `connectAndKeepAlive(address: String): Boolean` | Connects and, on success, starts the foreground notification that keeps the process (and connection) alive after the app leaves Recents. |
+| `disconnect()` | Disconnects and drops the foreground/notification state. |
+| `LocalBinder.getService(): BluetoothPrinterService` | Retrieve the service instance from `onServiceConnected`. |
+
+### `BluetoothPermissions`
+
+Runtime permission helpers for the Android 12+ `BLUETOOTH_CONNECT` permission.
+
+| Function | Description |
+|---|---|
+| `isGranted(context: Context): Boolean` | Whether Bluetooth permission is already granted (always `true` below Android 12). |
+| `getRequiredPermissions(): Array<String>` | The permission(s) this device's Android version actually needs (empty below Android 12). |
+| `request(activity: Activity, requestCode: Int = REQUEST_CODE)` | Shows the system permission dialog via the classic `ActivityCompat` API — for hosts not using `ActivityResultContracts`. |
+| `isGrantResult(requestCode: Int, grantResults: IntArray, expectedRequestCode: Int = REQUEST_CODE): Boolean` | Call from `onRequestPermissionsResult` to read the outcome of `request()`. |
+
+If your Activity is a `ComponentActivity`, prefer `registerForActivityResult(ActivityResultContracts.RequestPermission())` with `BluetoothPermissions.isGranted()`/`getRequiredPermissions()` for the check — mixing both permission mechanisms in the same Activity is unreliable.
+
+### Data types
+
+```kotlin
+data class BluetoothPrinterDevice(val name: String?, val address: String)
+
+enum class PrinterImageType { PNG, JPEG }
+```
+
+## Persistent connection
+
+A `BluetoothPrinter` held directly by an `Activity` disconnects the moment the app's process dies — including when the user swipes the app away from Recents. `BluetoothPrinterService` avoids this: while a printer is connected, it runs as a **foreground service** with a small ongoing notification, which keeps its process (and the socket) alive independently of any Activity. Bind to it once at app startup (see [Quick start](#quick-start)) rather than constructing `BluetoothPrinter` yourself.
+
+## Auto-reconnect
+
+Every successful `connectPrinter()` call remembers the device's address (`SharedPreferences`, cleared on `disconnectPrinter()`). `BluetoothPrinterService` calls `autoConnectIfAvailable()` once when it's first created, so a user re-opening the app after it was fully killed reconnects to their printer automatically instead of having to pick it again.
+
+## Printing Bangla / other non-Latin text
+
+ESC/POS printer firmware fonts only cover ASCII. `printText()` reflects that limitation directly. For anything with Bangla (or other non-Latin scripts), render it as an image instead — either build a `Bitmap` yourself and call `printImageBitmap()`, or write it as HTML/CSS and call `printHtml()`, which renders it with a real font via `WebView` and prints the result as a dithered raster image.
+
+## License
+
+Copyright 2026 DeveloperRejaul. Licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
