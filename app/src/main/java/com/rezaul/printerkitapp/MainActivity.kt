@@ -1,9 +1,11 @@
 package com.rezaul.printerkitapp
 
+import android.Manifest
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.os.IBinder
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -30,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.rezaul.printerkitapp.ui.theme.PrinterKitTheme
 import com.rezaul.printerkit.BluetoothPermissions
 import com.rezaul.printerkit.BluetoothPrinter
@@ -66,25 +69,33 @@ class MainActivity : ComponentActivity() {
     // ActivityCompat.requestPermissions()/onRequestPermissionsResult pair in the
     // library for hosts that aren't a ComponentActivity, but mixing both mechanisms
     // in the same Activity is unreliable, so this screen sticks to one).
+    //
+    // getRequiredPermissions() can return more than one permission (BLUETOOTH_CONNECT
+    // and, on Android 13+, POST_NOTIFICATIONS), so this uses RequestMultiplePermissions
+    // rather than RequestPermission (single) - launching only the first would silently
+    // never ask for the rest.
     private var onBluetoothPermissionResult: ((Boolean) -> Unit)? = null
-    private val requestBluetoothPermission =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            onBluetoothPermissionResult?.invoke(granted)
+    private val requestBluetoothPermissions =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+            // Only BLUETOOTH_CONNECT actually gates the printer's core features -
+            // POST_NOTIFICATIONS only affects whether the "connected" notification is
+            // visible, so its result (if present) doesn't fail this callback.
+            val connectGranted = results[Manifest.permission.BLUETOOTH_CONNECT] ?: true
+            onBluetoothPermissionResult?.invoke(connectGranted)
         }
 
     /** Ensures Bluetooth permission is granted (a no-op on Android < 12), then calls [onResult]. */
     private fun ensureBluetoothPermission(onResult: (Boolean) -> Unit) {
-        if (BluetoothPermissions.isGranted(this)) {
-            onResult(true)
-            return
-        }
         val required = BluetoothPermissions.getRequiredPermissions()
-        if (required.isEmpty()) {
+        val alreadyGranted = required.all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+        if (required.isEmpty() || alreadyGranted) {
             onResult(true)
             return
         }
         onBluetoothPermissionResult = onResult
-        requestBluetoothPermission.launch(required.first())
+        requestBluetoothPermissions.launch(required)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
