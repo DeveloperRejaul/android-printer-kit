@@ -1,6 +1,6 @@
 # PrinterKit
 
-[![Release](https://img.shields.io/github/v/release/DeveloperRejaul/printer-kit)](https://github.com/DeveloperRejaul/printer-kit)
+[![Release](https://img.shields.io/github/v/release/DeveloperRejaul/android-printer-kit)](https://github.com/DeveloperRejaul/android-printer-kit)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 A professional Android library for talking to Bluetooth POS/thermal (ESC/POS) printers directly from your app — no third-party printer app required. It connects over Bluetooth Classic (SPP), keeps that connection alive in the background via a foreground service, and can print raw text, images, PDFs, and full **HTML content — including non-Latin scripts like Bangla** that ESC/POS printer fonts don't support natively.
@@ -45,7 +45,7 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("com.github.DeveloperRejaul:printerkit:v0.0.1")
+    implementation("com.github.DeveloperRejaul:android-printer-kit:v0.0.1")
 }
 ```
 
