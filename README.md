@@ -113,24 +113,24 @@ data class PrintImageBitmapParams(
     val bitmap: Bitmap,
     val printerWidthDots: Int = 384,
     val feedLines: Int = 3,
-    val bandHeightDots: Int = 32, // lower this if a printer still drops/garbles large images
-    val bandDelayMs: Long = 50L  // raise this if a printer still drops/garbles large images
+    val bandHeightDots: Int = 16, // lower this if a printer still drops/garbles large images
+    val bandDelayMs: Long = 60L  // raise this if a printer still drops/garbles large images
 )
 
 data class PrintImageFileParams(
     val imagePath: String,
     val printerWidthDots: Int = 384,
     val feedLines: Int = 3,
-    val bandHeightDots: Int = 32,
-    val bandDelayMs: Long = 50L
+    val bandHeightDots: Int = 16,
+    val bandDelayMs: Long = 60L
 )
 
 data class PrintImageBase64Params(
     val base64: String,
     val printerWidthDots: Int = 384,
     val feedLines: Int = 3,
-    val bandHeightDots: Int = 32,
-    val bandDelayMs: Long = 50L
+    val bandHeightDots: Int = 16,
+    val bandDelayMs: Long = 60L
 )
 
 data class PdfToImageParams(
@@ -146,8 +146,8 @@ data class PrintPdfParams(
     val printerWidthDots: Int = 384,
     val page: Int = 0,
     val feedLines: Int = 3,
-    val bandHeightDots: Int = 32,
-    val bandDelayMs: Long = 50L
+    val bandHeightDots: Int = 16,
+    val bandDelayMs: Long = 60L
 )
 
 data class HtmlToPdfParams(
@@ -164,8 +164,8 @@ data class PrintHtmlParams(
     val pageWidthDp: Int = 412,
     val heightDp: Int? = null,
     val minPageHeightDp: Int = 1000,
-    val bandHeightDots: Int = 32,
-    val bandDelayMs: Long = 50L
+    val bandHeightDots: Int = 16,
+    val bandDelayMs: Long = 60L
 )
 ```
 
