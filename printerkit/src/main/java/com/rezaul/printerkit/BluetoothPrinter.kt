@@ -37,25 +37,36 @@ data class ConnectPrinterParams(val address: String)
 /** Parameters for [BluetoothPrinter.printText]. */
 data class PrintTextParams(val text: String, val feedLines: Int = 3)
 
-/** Parameters for [BluetoothPrinter.printImageBitmap]. */
+/**
+ * Parameters for [BluetoothPrinter.printImageBitmap]. [bandHeightDots]/[bandDelayMs] control
+ * how the image is paced to the printer - see [BluetoothPrinter.printImageBitmap] for why.
+ * Lower [bandHeightDots] and/or raise [bandDelayMs] for printers with a small receive buffer
+ * that drop or garble large images.
+ */
 data class PrintImageBitmapParams(
     val bitmap: Bitmap,
     val printerWidthDots: Int = 384,
-    val feedLines: Int = 3
+    val feedLines: Int = 3,
+    val bandHeightDots: Int = 64,
+    val bandDelayMs: Long = 40L
 )
 
-/** Parameters for [BluetoothPrinter.printImageFile]. */
+/** Parameters for [BluetoothPrinter.printImageFile]. See [PrintImageBitmapParams] for [bandHeightDots]/[bandDelayMs]. */
 data class PrintImageFileParams(
     val imagePath: String,
     val printerWidthDots: Int = 384,
-    val feedLines: Int = 3
+    val feedLines: Int = 3,
+    val bandHeightDots: Int = 64,
+    val bandDelayMs: Long = 40L
 )
 
-/** Parameters for [BluetoothPrinter.printImageBase64]. */
+/** Parameters for [BluetoothPrinter.printImageBase64]. See [PrintImageBitmapParams] for [bandHeightDots]/[bandDelayMs]. */
 data class PrintImageBase64Params(
     val base64: String,
     val printerWidthDots: Int = 384,
-    val feedLines: Int = 3
+    val feedLines: Int = 3,
+    val bandHeightDots: Int = 64,
+    val bandDelayMs: Long = 40L
 )
 
 /** Parameters for [BluetoothPrinter.pdfToImage]. [outputDir] defaults to the app's cache dir when null. */
@@ -67,12 +78,14 @@ data class PdfToImageParams(
     val outputDir: String? = null
 )
 
-/** Parameters for [BluetoothPrinter.printPdf]. */
+/** Parameters for [BluetoothPrinter.printPdf]. See [PrintImageBitmapParams] for [bandHeightDots]/[bandDelayMs]. */
 data class PrintPdfParams(
     val pdfPath: String,
     val printerWidthDots: Int = 384,
     val page: Int = 0,
-    val feedLines: Int = 3
+    val feedLines: Int = 3,
+    val bandHeightDots: Int = 64,
+    val bandDelayMs: Long = 40L
 )
 
 /**
@@ -88,13 +101,18 @@ data class HtmlToPdfParams(
     val minPageHeightDp: Int = 1000
 )
 
-/** Parameters for [BluetoothPrinter.printHtml]. See [HtmlToPdfParams] for the HTML sizing fields. */
+/**
+ * Parameters for [BluetoothPrinter.printHtml]. See [HtmlToPdfParams] for the HTML sizing
+ * fields and [PrintImageBitmapParams] for [bandHeightDots]/[bandDelayMs].
+ */
 data class PrintHtmlParams(
     val html: String,
     val printerWidthDots: Int = 384,
     val pageWidthDp: Int = 412,
     val heightDp: Int? = null,
-    val minPageHeightDp: Int = 1000
+    val minPageHeightDp: Int = 1000,
+    val bandHeightDots: Int = 64,
+    val bandDelayMs: Long = 40L
 )
 
 private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
@@ -225,11 +243,13 @@ class BluetoothPrinter(private val context: Context) {
      * [PrintImageBitmapParams.printerWidthDots] (384 for common 58mm printers, 576
      * for 80mm printers).
      *
-     * Sent as separate `GS v 0` commands per [BAND_HEIGHT_DOTS]-tall horizontal band,
-     * with a short pause between each, rather than one command for the whole image.
-     * Many cheap ESC/POS boards have a small receive buffer and either truncate or
-     * silently drop an oversized/bursty raster command (connect + write both report
-     * success, but nothing comes out) - banding keeps each command small and paced.
+     * Sent as separate `GS v 0` commands per [PrintImageBitmapParams.bandHeightDots]-tall
+     * horizontal band, with a [PrintImageBitmapParams.bandDelayMs] pause between each,
+     * rather than one command for the whole image. Many cheap ESC/POS boards have a small
+     * receive buffer and either truncate or silently drop an oversized/bursty raster command
+     * (connect + write both report success, but nothing comes out) - banding keeps each
+     * command small and paced. Lower [PrintImageBitmapParams.bandHeightDots] and/or raise
+     * [PrintImageBitmapParams.bandDelayMs] if a printer still drops or garbles large images.
      */
     fun printImageBitmap(params: PrintImageBitmapParams) {
         val scaled = scaleToWidth(params.bitmap, params.printerWidthDots)
@@ -241,7 +261,7 @@ class BluetoothPrinter(private val context: Context) {
 
                 var y = 0
                 while (y < scaled.height) {
-                    val bandHeight = minOf(BAND_HEIGHT_DOTS, scaled.height - y)
+                    val bandHeight = minOf(params.bandHeightDots, scaled.height - y)
                     val band = Bitmap.createBitmap(scaled, 0, y, scaled.width, bandHeight)
                     try {
                         out.write(toEscPosRaster(band))
@@ -249,7 +269,7 @@ class BluetoothPrinter(private val context: Context) {
                     } finally {
                         band.recycle()
                     }
-                    Thread.sleep(BAND_DELAY_MS)
+                    Thread.sleep(params.bandDelayMs)
                     y += bandHeight
                 }
 
@@ -266,7 +286,11 @@ class BluetoothPrinter(private val context: Context) {
         val bitmap = BitmapFactory.decodeFile(params.imagePath)
             ?: throw IllegalArgumentException("Could not decode image: ${params.imagePath}")
         try {
-            printImageBitmap(PrintImageBitmapParams(bitmap, params.printerWidthDots, params.feedLines))
+            printImageBitmap(
+                PrintImageBitmapParams(
+                    bitmap, params.printerWidthDots, params.feedLines, params.bandHeightDots, params.bandDelayMs
+                )
+            )
         } finally {
             bitmap.recycle()
         }
@@ -278,7 +302,11 @@ class BluetoothPrinter(private val context: Context) {
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             ?: throw IllegalArgumentException("Could not decode base64 image")
         try {
-            printImageBitmap(PrintImageBitmapParams(bitmap, params.printerWidthDots, params.feedLines))
+            printImageBitmap(
+                PrintImageBitmapParams(
+                    bitmap, params.printerWidthDots, params.feedLines, params.bandHeightDots, params.bandDelayMs
+                )
+            )
         } finally {
             bitmap.recycle()
         }
@@ -338,7 +366,11 @@ class BluetoothPrinter(private val context: Context) {
             )
         )
         try {
-            printImageFile(PrintImageFileParams(imagePath, params.printerWidthDots, params.feedLines))
+            printImageFile(
+                PrintImageFileParams(
+                    imagePath, params.printerWidthDots, params.feedLines, params.bandHeightDots, params.bandDelayMs
+                )
+            )
         } finally {
             File(imagePath).delete()
         }
@@ -385,7 +417,12 @@ class BluetoothPrinter(private val context: Context) {
             }
             Thread {
                 try {
-                    printPdf(PrintPdfParams(pdfPath, params.printerWidthDots))
+                    printPdf(
+                        PrintPdfParams(
+                            pdfPath, params.printerWidthDots,
+                            bandHeightDots = params.bandHeightDots, bandDelayMs = params.bandDelayMs
+                        )
+                    )
                     onResult(true)
                 } catch (e: Exception) {
                     Log.e(TAG, "printHtml failed", e)
@@ -495,11 +532,5 @@ class BluetoothPrinter(private val context: Context) {
         private const val PREFS_NAME = "bluetooth_printer_prefs"
         private const val KEY_LAST_ADDRESS = "last_connected_address"
         private val ESC_INIT = byteArrayOf(0x1B, 0x40) // ESC @ : initialize printer
-
-        // Cheap ESC/POS boards commonly have a small receive buffer; a single big
-        // GS v 0 command for a tall image can get truncated/dropped silently. Bands
-        // this small, paced a few ms apart, print reliably across those boards.
-        private const val BAND_HEIGHT_DOTS = 128
-        private const val BAND_DELAY_MS = 25L
     }
 }

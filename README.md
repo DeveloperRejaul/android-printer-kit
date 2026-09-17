@@ -109,11 +109,29 @@ data class ConnectPrinterParams(val address: String)
 
 data class PrintTextParams(val text: String, val feedLines: Int = 3)
 
-data class PrintImageBitmapParams(val bitmap: Bitmap, val printerWidthDots: Int = 384, val feedLines: Int = 3)
+data class PrintImageBitmapParams(
+    val bitmap: Bitmap,
+    val printerWidthDots: Int = 384,
+    val feedLines: Int = 3,
+    val bandHeightDots: Int = 64, // lower this if a printer still drops/garbles large images
+    val bandDelayMs: Long = 40L  // raise this if a printer still drops/garbles large images
+)
 
-data class PrintImageFileParams(val imagePath: String, val printerWidthDots: Int = 384, val feedLines: Int = 3)
+data class PrintImageFileParams(
+    val imagePath: String,
+    val printerWidthDots: Int = 384,
+    val feedLines: Int = 3,
+    val bandHeightDots: Int = 64,
+    val bandDelayMs: Long = 40L
+)
 
-data class PrintImageBase64Params(val base64: String, val printerWidthDots: Int = 384, val feedLines: Int = 3)
+data class PrintImageBase64Params(
+    val base64: String,
+    val printerWidthDots: Int = 384,
+    val feedLines: Int = 3,
+    val bandHeightDots: Int = 64,
+    val bandDelayMs: Long = 40L
+)
 
 data class PdfToImageParams(
     val pdfPath: String,
@@ -123,7 +141,14 @@ data class PdfToImageParams(
     val outputDir: String? = null // null -> the app's cache dir
 )
 
-data class PrintPdfParams(val pdfPath: String, val printerWidthDots: Int = 384, val page: Int = 0, val feedLines: Int = 3)
+data class PrintPdfParams(
+    val pdfPath: String,
+    val printerWidthDots: Int = 384,
+    val page: Int = 0,
+    val feedLines: Int = 3,
+    val bandHeightDots: Int = 64,
+    val bandDelayMs: Long = 40L
+)
 
 data class HtmlToPdfParams(
     val html: String,
@@ -138,11 +163,15 @@ data class PrintHtmlParams(
     val printerWidthDots: Int = 384,
     val pageWidthDp: Int = 412,
     val heightDp: Int? = null,
-    val minPageHeightDp: Int = 1000
+    val minPageHeightDp: Int = 1000,
+    val bandHeightDots: Int = 64,
+    val bandDelayMs: Long = 40L
 )
 ```
 
 **HTML sizing parameters** (`pageWidthDp`, `heightDp`, `minPageHeightDp`): `pageWidthDp` controls how large your HTML's content renders (like a CSS viewport width), independent of the final printed width (`printerWidthDots` downscales to that). Leave `heightDp` unset to auto-measure your HTML's real content height (recommended); set it to force an exact page height instead.
+
+**Image banding parameters** (`bandHeightDots`, `bandDelayMs`): images are sent as separate raster commands per `bandHeightDots`-tall horizontal band, paced `bandDelayMs` apart, instead of one command for the whole image — cheap ESC/POS boards have a small receive buffer and can silently drop or garble an oversized/bursty command. If a printer still drops/garbles large images, lower `bandHeightDots` and/or raise `bandDelayMs` further.
 
 ### `BluetoothPrinterService`
 
