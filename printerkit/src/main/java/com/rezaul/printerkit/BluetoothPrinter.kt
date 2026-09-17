@@ -15,6 +15,7 @@ import android.util.Base64
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.util.UUID
 
 /**
@@ -143,12 +144,14 @@ class BluetoothPrinter(private val context: Context) {
      * suitable for Bangla or other non-Latin scripts, use [printImageBitmap] for that).
      */
     fun printText(text: String, feedLines: Int = 3) {
-        val out = requireSocket().outputStream
-        out.write(ESC_INIT)
-        out.write(text.toByteArray(Charsets.US_ASCII))
-        out.write(byteArrayOf(0x0A))
-        out.write(ByteArray(feedLines) { 0x0A })
-        out.flush()
+        writeWithRetry {
+            val out = requireSocket().outputStream
+            out.write(ESC_INIT)
+            out.write(text.toByteArray(Charsets.US_ASCII))
+            out.write(byteArrayOf(0x0A))
+            out.write(ByteArray(feedLines) { 0x0A })
+            out.flush()
+        }
     }
 
     /**
@@ -162,28 +165,30 @@ class BluetoothPrinter(private val context: Context) {
      * success, but nothing comes out) - banding keeps each command small and paced.
      */
     fun printImageBitmap(bitmap: Bitmap, printerWidthDots: Int = 384, feedLines: Int = 3) {
-        val out = requireSocket().outputStream
         val scaled = scaleToWidth(bitmap, printerWidthDots)
         try {
-            out.write(ESC_INIT)
-            out.flush()
+            writeWithRetry {
+                val out = requireSocket().outputStream
+                out.write(ESC_INIT)
+                out.flush()
 
-            var y = 0
-            while (y < scaled.height) {
-                val bandHeight = minOf(BAND_HEIGHT_DOTS, scaled.height - y)
-                val band = Bitmap.createBitmap(scaled, 0, y, scaled.width, bandHeight)
-                try {
-                    out.write(toEscPosRaster(band))
-                    out.flush()
-                } finally {
-                    band.recycle()
+                var y = 0
+                while (y < scaled.height) {
+                    val bandHeight = minOf(BAND_HEIGHT_DOTS, scaled.height - y)
+                    val band = Bitmap.createBitmap(scaled, 0, y, scaled.width, bandHeight)
+                    try {
+                        out.write(toEscPosRaster(band))
+                        out.flush()
+                    } finally {
+                        band.recycle()
+                    }
+                    Thread.sleep(BAND_DELAY_MS)
+                    y += bandHeight
                 }
-                Thread.sleep(BAND_DELAY_MS)
-                y += bandHeight
-            }
 
-            out.write(ByteArray(feedLines) { 0x0A })
-            out.flush()
+                out.write(ByteArray(feedLines) { 0x0A })
+                out.flush()
+            }
         } finally {
             if (scaled !== bitmap) scaled.recycle()
         }
@@ -336,6 +341,26 @@ class BluetoothPrinter(private val context: Context) {
 
     private fun requireSocket(): BluetoothSocket {
         return socket ?: throw IllegalStateException("Printer not connected. Call connectPrinter() first.")
+    }
+
+    /**
+     * Runs [action] (a full write to the printer's [BluetoothSocket]); if it fails with an
+     * [IOException] - e.g. "Broken pipe" because a cheap ESC/POS board silently dropped the
+     * link mid-print - reconnects to the same device once and retries [action] from scratch
+     * exactly once. A second failure (or a failed reconnect) propagates the exception as-is.
+     */
+    private fun writeWithRetry(action: () -> Unit) {
+        try {
+            action()
+        } catch (e: IOException) {
+            val address = connectedDevice?.address
+            Log.w(TAG, "Write to printer failed (${e.message}); reconnecting and retrying once", e)
+            closeSocketQuietly()
+            if (address == null || !connectPrinter(address)) {
+                throw e
+            }
+            action()
+        }
     }
 
     private fun closeSocketQuietly() {
