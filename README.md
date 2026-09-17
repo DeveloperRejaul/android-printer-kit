@@ -17,6 +17,7 @@ Most ESC/POS printer libraries only send raw text or a single pre-made image. Th
 - **Non-Latin text support** (Bangla and others) via image-based rendering, bypassing ESC/POS's font limitations.
 - **Persistent connection**: printer stays connected even if the app is swiped away from Recents, via a foreground `BluetoothPrinterService`.
 - **Auto-reconnect**: remembers the last connected printer and reconnects automatically the next time the app starts.
+- **Resilient connect**: falls back to a direct RFCOMM channel when a printer's SDP service record is broken, and actively detects real disconnects (via Android's ACL-disconnect broadcast) instead of trusting a stale socket flag.
 - **Banded raster printing**: images are sent in small, paced chunks — many cheap ESC/POS boards silently drop large single print commands, and banding avoids that.
 - **Permission helpers**: `BluetoothPermissions` wraps the Android 12+ `BLUETOOTH_CONNECT` and Android 13+ `POST_NOTIFICATIONS` runtime permissions so you don't have to handle version checks yourself.
 
@@ -88,10 +89,10 @@ Every function that takes data (anything beyond a bare callback) takes a single 
 | Function | Description |
 |---|---|
 | `getBondedBluetoothPrinters(): List<BluetoothPrinterDevice>` | Lists Bluetooth devices already paired via Android's own Bluetooth settings. |
-| `connectPrinter(params: ConnectPrinterParams): Boolean` | Opens an RFCOMM/SPP socket to the paired device. Closes any existing connection first. Remembers the address for `autoConnectIfAvailable()`. |
+| `connectPrinter(params: ConnectPrinterParams): Boolean` | Opens an RFCOMM/SPP socket to the paired device, falling back to a direct RFCOMM channel if the standard SDP-based socket fails. Closes any existing connection first. Remembers the address for `autoConnectIfAvailable()`. |
 | `autoConnectIfAvailable(): Boolean` | Reconnects to the last successfully connected printer, if any. Called automatically by `BluetoothPrinterService` on startup. |
 | `disconnectPrinter()` | Closes the connection and forgets the remembered address. |
-| `isConnectedPrinter(): Boolean` | Whether a printer socket is currently open. |
+| `isConnectedPrinter(): Boolean` | Whether a printer socket is currently open. Kept accurate by listening for Android's ACL-disconnect broadcast, so it reflects a real physical disconnect immediately instead of a stale flag. |
 | `getConnectedPrinter(): BluetoothPrinterDevice?` | The currently connected device, or `null`. |
 | `printText(params: PrintTextParams)` | Sends raw text using the printer's built-in font. **ASCII only** — not for Bangla or other non-Latin scripts. Retries once (reconnect + resend) if the write fails. |
 | `printImageBitmap(params: PrintImageBitmapParams)` | Prints a `Bitmap` as a dithered ESC/POS raster image, sent in paced bands for reliability on cheap boards. Retries once (reconnect + resend) if the write fails. |

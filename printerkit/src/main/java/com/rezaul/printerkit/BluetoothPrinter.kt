@@ -5,14 +5,19 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Base64
 import android.util.Log
+import androidx.core.content.ContextCompat
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -146,6 +151,31 @@ class BluetoothPrinter(private val context: Context) {
     // see autoConnectIfAvailable().
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    // BluetoothSocket.isConnected() (see isConnectedPrinter()) never updates itself -
+    // it stays true even after the printer physically drops the link, since nothing
+    // tells it to. Listening for the system's own ACL-disconnect broadcast lets us
+    // notice a real disconnect immediately and clear the socket, so isConnectedPrinter()
+    // reports the truth instead of a stale flag. Registered for the app's lifetime,
+    // same as this class's other application-scoped state - there's nothing to leak.
+    private val connectionWatcher = object : BroadcastReceiver() {
+        override fun onReceive(receivedContext: Context, intent: Intent) {
+            val device = getDeviceExtra(intent) ?: return
+            if (device.address == connectedDevice?.address) {
+                Log.w(TAG, "Printer ${device.address} physically disconnected")
+                closeSocketQuietly()
+            }
+        }
+    }
+
+    init {
+        ContextCompat.registerReceiver(
+            context,
+            connectionWatcher,
+            IntentFilter(BluetoothDevice.ACTION_ACL_DISCONNECTED),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+    }
+
     /**
      * Returns all Bluetooth devices already paired with this phone/tablet.
      * On Android 12+ this requires the BLUETOOTH_CONNECT runtime permission;
@@ -165,32 +195,69 @@ class BluetoothPrinter(private val context: Context) {
     /**
      * Opens an RFCOMM (Serial Port Profile) socket to the paired device at [params]'s
      * address. Any existing connection is closed first. Returns true on success.
+     *
+     * Tries the standard SDP-based socket first, then falls back to a direct RFCOMM
+     * channel via reflection - many cheap ESC/POS boards have a broken/slow SDP service
+     * record that makes [BluetoothDevice.createRfcommSocketToServiceRecord] fail or hang
+     * even though the printer is reachable, and this fallback is the standard workaround.
      */
     @SuppressLint("MissingPermission")
     fun connectPrinter(params: ConnectPrinterParams): Boolean {
         val adapter = bluetoothAdapter ?: return false
+        val wasConnected = isConnectedPrinter()
         disconnectPrinter()
+        if (wasConnected) {
+            // Give the printer's own Bluetooth stack a moment to notice the ACL
+            // disconnect and free its (usually single) connection slot before asking
+            // it to accept a new one - reconnecting instantly after closing the old
+            // socket can otherwise get rejected on cheap boards.
+            Thread.sleep(RECONNECT_SETTLE_MS)
+        }
+
+        val device = try {
+            adapter.getRemoteDevice(params.address)
+        } catch (e: Exception) {
+            Log.e(TAG, "Invalid printer address ${params.address}", e)
+            return false
+        }
+        // Best-effort: speeds up connect if discovery happens to be running, but
+        // requires BLUETOOTH_SCAN (not BLUETOOTH_CONNECT) on API 31+, which this
+        // library doesn't otherwise need - never let its absence block connecting.
+        try {
+            adapter.cancelDiscovery()
+        } catch (e: SecurityException) {
+            Log.w(TAG, "cancelDiscovery() skipped (missing BLUETOOTH_SCAN permission)", e)
+        }
+
+        if (tryOpenSocket(device) { device.createRfcommSocketToServiceRecord(SPP_UUID) }) return true
+        Log.w(TAG, "SDP-based connect failed for ${params.address}; trying direct RFCOMM channel fallback")
+        return tryOpenSocket(device) { createFallbackRfcommSocket(device) }
+    }
+
+    /** Opens [openSocket] and connects it; on success stores it as the active connection. */
+    private fun tryOpenSocket(device: BluetoothDevice, openSocket: () -> BluetoothSocket): Boolean {
         return try {
-            val device = adapter.getRemoteDevice(params.address)
-            // Best-effort: speeds up connect if discovery happens to be running, but
-            // requires BLUETOOTH_SCAN (not BLUETOOTH_CONNECT) on API 31+, which this
-            // library doesn't otherwise need - never let its absence block connecting.
-            try {
-                adapter.cancelDiscovery()
-            } catch (e: SecurityException) {
-                Log.w(TAG, "cancelDiscovery() skipped (missing BLUETOOTH_SCAN permission)", e)
-            }
-            val newSocket = device.createRfcommSocketToServiceRecord(SPP_UUID)
+            val newSocket = openSocket()
             newSocket.connect()
             socket = newSocket
             connectedDevice = device
-            prefs.edit().putString(KEY_LAST_ADDRESS, params.address).apply()
+            prefs.edit().putString(KEY_LAST_ADDRESS, device.address).apply()
             true
         } catch (e: Exception) {
-            Log.e(TAG, "connectPrinter failed for ${params.address}", e)
+            Log.e(TAG, "connect attempt failed for ${device.address}", e)
             closeSocketQuietly()
             false
         }
+    }
+
+    /**
+     * Opens an RFCOMM socket on a fixed channel via the hidden `createRfcommSocket(int)`
+     * API, bypassing SDP lookup entirely. Channel 1 is what SPP profiles conventionally
+     * use and is the standard fallback for printers with broken SDP records.
+     */
+    private fun createFallbackRfcommSocket(device: BluetoothDevice): BluetoothSocket {
+        val method = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
+        return method.invoke(device, 1) as BluetoothSocket
     }
 
     /**
@@ -458,6 +525,16 @@ class BluetoothPrinter(private val context: Context) {
         }
     }
 
+    /** Type-safe [BluetoothDevice.EXTRA_DEVICE] extraction across API levels. */
+    private fun getDeviceExtra(intent: Intent): BluetoothDevice? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+        }
+    }
+
     private fun closeSocketQuietly() {
         try {
             socket?.close()
@@ -532,5 +609,6 @@ class BluetoothPrinter(private val context: Context) {
         private const val PREFS_NAME = "bluetooth_printer_prefs"
         private const val KEY_LAST_ADDRESS = "last_connected_address"
         private val ESC_INIT = byteArrayOf(0x1B, 0x40) // ESC @ : initialize printer
+        private const val RECONNECT_SETTLE_MS = 200L
     }
 }
