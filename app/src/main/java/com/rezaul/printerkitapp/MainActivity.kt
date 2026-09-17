@@ -38,6 +38,15 @@ import com.rezaul.printerkit.BluetoothPermissions
 import com.rezaul.printerkit.BluetoothPrinter
 import com.rezaul.printerkit.BluetoothPrinterDevice
 import com.rezaul.printerkit.BluetoothPrinterService
+import com.rezaul.printerkit.ConnectPrinterParams
+import com.rezaul.printerkit.HtmlToPdfParams
+import com.rezaul.printerkit.PdfToImageParams
+import com.rezaul.printerkit.PrintHtmlParams
+import com.rezaul.printerkit.PrintImageBase64Params
+import com.rezaul.printerkit.PrintImageBitmapParams
+import com.rezaul.printerkit.PrintImageFileParams
+import com.rezaul.printerkit.PrintPdfParams
+import com.rezaul.printerkit.PrintTextParams
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -276,7 +285,7 @@ fun BluetoothPrinterTestScreen(
 
         TestButton(label = "printText(text)", activeAction = activeAction) {
             run("printText(text)") {
-                printer.printText("PrinterKit\nBluetooth Printer Test\nprintText() OK")
+                printer.printText(PrintTextParams(text = "PrinterKit\nBluetooth Printer Test\nprintText() OK"))
             }
         }
 
@@ -285,7 +294,7 @@ fun BluetoothPrinterTestScreen(
         TestButton(label = "printImageBitmap(bitmap)", activeAction = activeAction) {
             run("printImageBitmap(bitmap)") {
                 val bitmap = generateTestBitmap()
-                printer.printImageBitmap(bitmap)
+                printer.printImageBitmap(PrintImageBitmapParams(bitmap = bitmap))
             }
         }
 
@@ -294,7 +303,7 @@ fun BluetoothPrinterTestScreen(
         TestButton(label = "printImageFile(imagePath)", activeAction = activeAction) {
             run("printImageFile(imagePath)") {
                 val file = saveBitmapToFile(generateTestBitmap(), cacheDir)
-                printer.printImageFile(file.absolutePath)
+                printer.printImageFile(PrintImageFileParams(imagePath = file.absolutePath))
             }
         }
 
@@ -303,7 +312,7 @@ fun BluetoothPrinterTestScreen(
         TestButton(label = "printImageBase64(base64)", activeAction = activeAction) {
             run("printImageBase64(base64)") {
                 val base64 = bitmapToBase64(generateTestBitmap())
-                printer.printImageBase64(base64)
+                printer.printImageBase64(PrintImageBase64Params(base64 = base64))
             }
         }
 
@@ -314,7 +323,7 @@ fun BluetoothPrinterTestScreen(
         TestButton(label = "pdfToImage(pdfPath, imageType)", activeAction = activeAction) {
             run("pdfToImage(pdfPath, imageType)") {
                 val pdfFile = generateTestPdf(cacheDir)
-                val imagePath = printer.pdfToImage(pdfFile.absolutePath)
+                val imagePath = printer.pdfToImage(PdfToImageParams(pdfPath = pdfFile.absolutePath))
                 showToast("pdfToImage() -> $imagePath")
             }
         }
@@ -324,7 +333,7 @@ fun BluetoothPrinterTestScreen(
         TestButton(label = "printPdf(pdfPath)  — full pipeline", activeAction = activeAction) {
             run("printPdf(pdfPath)  — full pipeline") {
                 val pdfFile = generateTestPdf(cacheDir)
-                printer.printPdf(pdfFile.absolutePath)
+                printer.printPdf(PrintPdfParams(pdfPath = pdfFile.absolutePath))
             }
         }
 
@@ -338,7 +347,7 @@ fun BluetoothPrinterTestScreen(
         TestButton(label = "htmlToPdf(html)", activeAction = activeAction) {
             activeAction = "htmlToPdf(html)"
             status = "htmlToPdf(html)..."
-            printer.htmlToPdf(sampleTestHtml()) { path ->
+            printer.htmlToPdf(HtmlToPdfParams(html = sampleTestHtml())) { path ->
                 activeAction = null
                 status = if (path != null) "htmlToPdf(html): OK" else "htmlToPdf(html) FAILED"
                 showToast("htmlToPdf() -> ${path ?: "null"}")
@@ -350,7 +359,7 @@ fun BluetoothPrinterTestScreen(
         TestButton(label = "printHtml(html)  — full pipeline", activeAction = activeAction) {
             activeAction = "printHtml(html)  — full pipeline"
             status = "printHtml(html)..."
-            printer.printHtml(sampleTestHtml()) { ok ->
+            printer.printHtml(PrintHtmlParams(html = sampleTestHtml())) { ok ->
                 activeAction = null
                 status = if (ok) "printHtml(html): OK" else "printHtml(html) FAILED"
             }
@@ -375,7 +384,7 @@ fun BluetoothPrinterTestScreen(
                             showPickerSheet = false
                         }
                     ) {
-                        val ok = printerService.connectAndKeepAlive(device.address)
+                        val ok = printerService.connectAndKeepAlive(ConnectPrinterParams(device.address))
                         if (!ok) throw IllegalStateException("connectPrinter() returned false")
                     }
                 },

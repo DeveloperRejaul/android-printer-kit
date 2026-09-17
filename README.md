@@ -64,13 +64,13 @@ bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
 
 // 2. Once bound, list paired printers and connect to one
 val printers = service.printer.getBondedBluetoothPrinters()
-service.connectAndKeepAlive(printers.first().address)
+service.connectAndKeepAlive(ConnectPrinterParams(address = printers.first().address))
 
 // 3. Print
-service.printer.printText("Hello from PrinterKit")
+service.printer.printText(PrintTextParams(text = "Hello from PrinterKit"))
 
 // or print a full HTML receipt (Bangla, styling, everything):
-service.printer.printHtml(myReceiptHtml) { success ->
+service.printer.printHtml(PrintHtmlParams(html = myReceiptHtml)) { success ->
     // called on a background thread
 }
 ```
@@ -83,22 +83,64 @@ The core class. Construct with `BluetoothPrinter(context)`, or — recommended �
 
 All connection and print calls do blocking I/O and must be called from a background thread, except where noted.
 
+Every function that takes data (anything beyond a bare callback) takes a single `...Params` data class instead of positional arguments, so new fields can be added later without breaking existing call sites.
+
 | Function | Description |
 |---|---|
 | `getBondedBluetoothPrinters(): List<BluetoothPrinterDevice>` | Lists Bluetooth devices already paired via Android's own Bluetooth settings. |
-| `connectPrinter(address: String): Boolean` | Opens an RFCOMM/SPP socket to the paired device. Closes any existing connection first. Remembers the address for `autoConnectIfAvailable()`. |
+| `connectPrinter(params: ConnectPrinterParams): Boolean` | Opens an RFCOMM/SPP socket to the paired device. Closes any existing connection first. Remembers the address for `autoConnectIfAvailable()`. |
 | `autoConnectIfAvailable(): Boolean` | Reconnects to the last successfully connected printer, if any. Called automatically by `BluetoothPrinterService` on startup. |
 | `disconnectPrinter()` | Closes the connection and forgets the remembered address. |
 | `isConnectedPrinter(): Boolean` | Whether a printer socket is currently open. |
 | `getConnectedPrinter(): BluetoothPrinterDevice?` | The currently connected device, or `null`. |
-| `printText(text: String, feedLines: Int = 3)` | Sends raw text using the printer's built-in font. **ASCII only** — not for Bangla or other non-Latin scripts. |
-| `printImageBitmap(bitmap: Bitmap, printerWidthDots: Int = 384, feedLines: Int = 3)` | Prints a `Bitmap` as a dithered ESC/POS raster image, sent in paced bands for reliability on cheap boards. |
-| `printImageFile(imagePath: String, printerWidthDots: Int = 384, feedLines: Int = 3)` | Decodes an image file and prints it. |
-| `printImageBase64(base64: String, printerWidthDots: Int = 384, feedLines: Int = 3)` | Decodes a base64-encoded image and prints it. |
-| `pdfToImage(pdfPath: String, imageType: PrinterImageType = PNG, page: Int = 0, targetWidthPx: Int? = null, outputDir: String = context.cacheDir): String` | Renders one PDF page to an image file (via Android's `PdfRenderer`) and returns its path. |
-| `printPdf(pdfPath: String, printerWidthDots: Int = 384, page: Int = 0, feedLines: Int = 3)` | `pdfToImage` + print, in one call. |
-| `htmlToPdf(html: String, outputPath: String = ..., pageWidthDp: Int = 412, heightDp: Int? = null, minPageHeightDp: Int = 1000, onResult: (String?) -> Unit)` | Renders HTML to a PDF file using an off-screen `WebView` (no external library). **Must be called from any thread — it hops to the main thread internally; `onResult` always fires on the main thread.** |
-| `printHtml(html: String, printerWidthDots: Int = 384, pageWidthDp: Int = 412, heightDp: Int? = null, minPageHeightDp: Int = 1000, onResult: (Boolean) -> Unit = {})` | Full pipeline: `htmlToPdf` → `printPdf`. `onResult` fires on a background thread. |
+| `printText(params: PrintTextParams)` | Sends raw text using the printer's built-in font. **ASCII only** — not for Bangla or other non-Latin scripts. Retries once (reconnect + resend) if the write fails. |
+| `printImageBitmap(params: PrintImageBitmapParams)` | Prints a `Bitmap` as a dithered ESC/POS raster image, sent in paced bands for reliability on cheap boards. Retries once (reconnect + resend) if the write fails. |
+| `printImageFile(params: PrintImageFileParams)` | Decodes an image file and prints it. |
+| `printImageBase64(params: PrintImageBase64Params)` | Decodes a base64-encoded image and prints it. |
+| `pdfToImage(params: PdfToImageParams): String` | Renders one PDF page to an image file (via Android's `PdfRenderer`) and returns its path. |
+| `printPdf(params: PrintPdfParams)` | `pdfToImage` + print, in one call. |
+| `htmlToPdf(params: HtmlToPdfParams, onResult: (String?) -> Unit)` | Renders HTML to a PDF file using an off-screen `WebView` (no external library). **Must be called from any thread — it hops to the main thread internally; `onResult` always fires on the main thread.** |
+| `printHtml(params: PrintHtmlParams, onResult: (Boolean) -> Unit = {})` | Full pipeline: `htmlToPdf` → `printPdf`. `onResult` fires on a background thread. |
+
+**Params data classes:**
+
+```kotlin
+data class ConnectPrinterParams(val address: String)
+
+data class PrintTextParams(val text: String, val feedLines: Int = 3)
+
+data class PrintImageBitmapParams(val bitmap: Bitmap, val printerWidthDots: Int = 384, val feedLines: Int = 3)
+
+data class PrintImageFileParams(val imagePath: String, val printerWidthDots: Int = 384, val feedLines: Int = 3)
+
+data class PrintImageBase64Params(val base64: String, val printerWidthDots: Int = 384, val feedLines: Int = 3)
+
+data class PdfToImageParams(
+    val pdfPath: String,
+    val imageType: PrinterImageType = PrinterImageType.PNG,
+    val page: Int = 0,
+    val targetWidthPx: Int? = null,
+    val outputDir: String? = null // null -> the app's cache dir
+)
+
+data class PrintPdfParams(val pdfPath: String, val printerWidthDots: Int = 384, val page: Int = 0, val feedLines: Int = 3)
+
+data class HtmlToPdfParams(
+    val html: String,
+    val outputPath: String? = null, // null -> a fresh file under the app's cache dir
+    val pageWidthDp: Int = 412,
+    val heightDp: Int? = null,
+    val minPageHeightDp: Int = 1000
+)
+
+data class PrintHtmlParams(
+    val html: String,
+    val printerWidthDots: Int = 384,
+    val pageWidthDp: Int = 412,
+    val heightDp: Int? = null,
+    val minPageHeightDp: Int = 1000
+)
+```
 
 **HTML sizing parameters** (`pageWidthDp`, `heightDp`, `minPageHeightDp`): `pageWidthDp` controls how large your HTML's content renders (like a CSS viewport width), independent of the final printed width (`printerWidthDots` downscales to that). Leave `heightDp` unset to auto-measure your HTML's real content height (recommended); set it to force an exact page height instead.
 
@@ -109,7 +151,7 @@ A foreground `Service` that owns a `BluetoothPrinter` instance so the connection
 | Member | Description |
 |---|---|
 | `printer: BluetoothPrinter` | The shared printer instance — use this for `printText`, `printHtml`, etc. |
-| `connectAndKeepAlive(address: String): Boolean` | Connects and, on success, starts the foreground notification that keeps the process (and connection) alive after the app leaves Recents. |
+| `connectAndKeepAlive(params: ConnectPrinterParams): Boolean` | Connects and, on success, starts the foreground notification that keeps the process (and connection) alive after the app leaves Recents. |
 | `disconnect()` | Disconnects and drops the foreground/notification state. |
 | `LocalBinder.getService(): BluetoothPrinterService` | Retrieve the service instance from `onServiceConnected`. |
 

@@ -51,9 +51,9 @@ class BluetoothPrinterService : Service() {
 
     override fun onBind(intent: Intent?): IBinder = binder
 
-    /** Connects [address] and, on success, promotes this service to the foreground so the connection outlives the app's task. */
-    fun connectAndKeepAlive(address: String): Boolean {
-        val ok = printer.connectPrinter(address)
+    /** Connects [params]'s address and, on success, promotes this service to the foreground so the connection outlives the app's task. */
+    fun connectAndKeepAlive(params: ConnectPrinterParams): Boolean {
+        val ok = printer.connectPrinter(params)
         if (ok) {
             startForeground(NOTIFICATION_ID, buildNotification(printer.getConnectedPrinter()?.name))
         }

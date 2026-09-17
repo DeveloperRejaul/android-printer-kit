@@ -31,6 +31,72 @@ data class BluetoothPrinterDevice(
  */
 enum class PrinterImageType { PNG, JPEG }
 
+/** Parameters for [BluetoothPrinter.connectPrinter] / [BluetoothPrinterService.connectAndKeepAlive]. */
+data class ConnectPrinterParams(val address: String)
+
+/** Parameters for [BluetoothPrinter.printText]. */
+data class PrintTextParams(val text: String, val feedLines: Int = 3)
+
+/** Parameters for [BluetoothPrinter.printImageBitmap]. */
+data class PrintImageBitmapParams(
+    val bitmap: Bitmap,
+    val printerWidthDots: Int = 384,
+    val feedLines: Int = 3
+)
+
+/** Parameters for [BluetoothPrinter.printImageFile]. */
+data class PrintImageFileParams(
+    val imagePath: String,
+    val printerWidthDots: Int = 384,
+    val feedLines: Int = 3
+)
+
+/** Parameters for [BluetoothPrinter.printImageBase64]. */
+data class PrintImageBase64Params(
+    val base64: String,
+    val printerWidthDots: Int = 384,
+    val feedLines: Int = 3
+)
+
+/** Parameters for [BluetoothPrinter.pdfToImage]. [outputDir] defaults to the app's cache dir when null. */
+data class PdfToImageParams(
+    val pdfPath: String,
+    val imageType: PrinterImageType = PrinterImageType.PNG,
+    val page: Int = 0,
+    val targetWidthPx: Int? = null,
+    val outputDir: String? = null
+)
+
+/** Parameters for [BluetoothPrinter.printPdf]. */
+data class PrintPdfParams(
+    val pdfPath: String,
+    val printerWidthDots: Int = 384,
+    val page: Int = 0,
+    val feedLines: Int = 3
+)
+
+/**
+ * Parameters for [BluetoothPrinter.htmlToPdf]. [outputPath] defaults to a fresh file
+ * under the app's cache dir when null. See [BluetoothPrinter.htmlToPdf] for what
+ * [pageWidthDp]/[heightDp]/[minPageHeightDp] control.
+ */
+data class HtmlToPdfParams(
+    val html: String,
+    val outputPath: String? = null,
+    val pageWidthDp: Int = 412,
+    val heightDp: Int? = null,
+    val minPageHeightDp: Int = 1000
+)
+
+/** Parameters for [BluetoothPrinter.printHtml]. See [HtmlToPdfParams] for the HTML sizing fields. */
+data class PrintHtmlParams(
+    val html: String,
+    val printerWidthDots: Int = 384,
+    val pageWidthDp: Int = 412,
+    val heightDp: Int? = null,
+    val minPageHeightDp: Int = 1000
+)
+
 private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
 /**
@@ -79,15 +145,15 @@ class BluetoothPrinter(private val context: Context) {
     }
 
     /**
-     * Opens an RFCOMM (Serial Port Profile) socket to the paired device at [address].
-     * Any existing connection is closed first. Returns true on success.
+     * Opens an RFCOMM (Serial Port Profile) socket to the paired device at [params]'s
+     * address. Any existing connection is closed first. Returns true on success.
      */
     @SuppressLint("MissingPermission")
-    fun connectPrinter(address: String): Boolean {
+    fun connectPrinter(params: ConnectPrinterParams): Boolean {
         val adapter = bluetoothAdapter ?: return false
         disconnectPrinter()
         return try {
-            val device = adapter.getRemoteDevice(address)
+            val device = adapter.getRemoteDevice(params.address)
             // Best-effort: speeds up connect if discovery happens to be running, but
             // requires BLUETOOTH_SCAN (not BLUETOOTH_CONNECT) on API 31+, which this
             // library doesn't otherwise need - never let its absence block connecting.
@@ -100,10 +166,10 @@ class BluetoothPrinter(private val context: Context) {
             newSocket.connect()
             socket = newSocket
             connectedDevice = device
-            prefs.edit().putString(KEY_LAST_ADDRESS, address).apply()
+            prefs.edit().putString(KEY_LAST_ADDRESS, params.address).apply()
             true
         } catch (e: Exception) {
-            Log.e(TAG, "connectPrinter failed for $address", e)
+            Log.e(TAG, "connectPrinter failed for ${params.address}", e)
             closeSocketQuietly()
             false
         }
@@ -119,7 +185,7 @@ class BluetoothPrinter(private val context: Context) {
     fun autoConnectIfAvailable(): Boolean {
         if (isConnectedPrinter()) return true
         val address = prefs.getString(KEY_LAST_ADDRESS, null) ?: return false
-        return connectPrinter(address)
+        return connectPrinter(ConnectPrinterParams(address))
     }
 
     /** Closes the current printer connection, if any, and forgets it for [autoConnectIfAvailable]. Safe to call when already disconnected. */
@@ -143,20 +209,21 @@ class BluetoothPrinter(private val context: Context) {
      * Sends raw text to the printer using its built-in font (ASCII only - not
      * suitable for Bangla or other non-Latin scripts, use [printImageBitmap] for that).
      */
-    fun printText(text: String, feedLines: Int = 3) {
+    fun printText(params: PrintTextParams) {
         writeWithRetry {
             val out = requireSocket().outputStream
             out.write(ESC_INIT)
-            out.write(text.toByteArray(Charsets.US_ASCII))
+            out.write(params.text.toByteArray(Charsets.US_ASCII))
             out.write(byteArrayOf(0x0A))
-            out.write(ByteArray(feedLines) { 0x0A })
+            out.write(ByteArray(params.feedLines) { 0x0A })
             out.flush()
         }
     }
 
     /**
-     * Prints [bitmap] as an ESC/POS raster image, scaled to [printerWidthDots]
-     * (384 for common 58mm printers, 576 for 80mm printers).
+     * Prints [PrintImageBitmapParams.bitmap] as an ESC/POS raster image, scaled to
+     * [PrintImageBitmapParams.printerWidthDots] (384 for common 58mm printers, 576
+     * for 80mm printers).
      *
      * Sent as separate `GS v 0` commands per [BAND_HEIGHT_DOTS]-tall horizontal band,
      * with a short pause between each, rather than one command for the whole image.
@@ -164,8 +231,8 @@ class BluetoothPrinter(private val context: Context) {
      * silently drop an oversized/bursty raster command (connect + write both report
      * success, but nothing comes out) - banding keeps each command small and paced.
      */
-    fun printImageBitmap(bitmap: Bitmap, printerWidthDots: Int = 384, feedLines: Int = 3) {
-        val scaled = scaleToWidth(bitmap, printerWidthDots)
+    fun printImageBitmap(params: PrintImageBitmapParams) {
+        val scaled = scaleToWidth(params.bitmap, params.printerWidthDots)
         try {
             writeWithRetry {
                 val out = requireSocket().outputStream
@@ -186,32 +253,32 @@ class BluetoothPrinter(private val context: Context) {
                     y += bandHeight
                 }
 
-                out.write(ByteArray(feedLines) { 0x0A })
+                out.write(ByteArray(params.feedLines) { 0x0A })
                 out.flush()
             }
         } finally {
-            if (scaled !== bitmap) scaled.recycle()
+            if (scaled !== params.bitmap) scaled.recycle()
         }
     }
 
-    /** Decodes the image file at [imagePath] and prints it. */
-    fun printImageFile(imagePath: String, printerWidthDots: Int = 384, feedLines: Int = 3) {
-        val bitmap = BitmapFactory.decodeFile(imagePath)
-            ?: throw IllegalArgumentException("Could not decode image: $imagePath")
+    /** Decodes the image file at [PrintImageFileParams.imagePath] and prints it. */
+    fun printImageFile(params: PrintImageFileParams) {
+        val bitmap = BitmapFactory.decodeFile(params.imagePath)
+            ?: throw IllegalArgumentException("Could not decode image: ${params.imagePath}")
         try {
-            printImageBitmap(bitmap, printerWidthDots, feedLines)
+            printImageBitmap(PrintImageBitmapParams(bitmap, params.printerWidthDots, params.feedLines))
         } finally {
             bitmap.recycle()
         }
     }
 
     /** Decodes a base64-encoded image and prints it. */
-    fun printImageBase64(base64: String, printerWidthDots: Int = 384, feedLines: Int = 3) {
-        val bytes = Base64.decode(base64, Base64.DEFAULT)
+    fun printImageBase64(params: PrintImageBase64Params) {
+        val bytes = Base64.decode(params.base64, Base64.DEFAULT)
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             ?: throw IllegalArgumentException("Could not decode base64 image")
         try {
-            printImageBitmap(bitmap, printerWidthDots, feedLines)
+            printImageBitmap(PrintImageBitmapParams(bitmap, params.printerWidthDots, params.feedLines))
         } finally {
             bitmap.recycle()
         }
@@ -222,22 +289,17 @@ class BluetoothPrinter(private val context: Context) {
      * [PdfRenderer] (no external dependency). Returns the absolute path of the
      * saved image.
      */
-    fun pdfToImage(
-        pdfPath: String,
-        imageType: PrinterImageType = PrinterImageType.PNG,
-        page: Int = 0,
-        targetWidthPx: Int? = null,
-        outputDir: String = context.cacheDir.absolutePath
-    ): String {
-        val file = File(pdfPath)
-        require(file.exists()) { "PDF file not found: $pdfPath" }
+    fun pdfToImage(params: PdfToImageParams): String {
+        val file = File(params.pdfPath)
+        require(file.exists()) { "PDF file not found: ${params.pdfPath}" }
+        val outputDir = params.outputDir ?: context.cacheDir.absolutePath
 
         ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
             PdfRenderer(descriptor).use { renderer ->
-                require(page in 0 until renderer.pageCount) { "Invalid page index: $page" }
-                renderer.openPage(page).use { pdfPage ->
-                    val scale = if (targetWidthPx != null) {
-                        targetWidthPx.toFloat() / pdfPage.width
+                require(params.page in 0 until renderer.pageCount) { "Invalid page index: ${params.page}" }
+                renderer.openPage(params.page).use { pdfPage ->
+                    val scale = if (params.targetWidthPx != null) {
+                        params.targetWidthPx.toFloat() / pdfPage.width
                     } else {
                         2f
                     }
@@ -248,10 +310,10 @@ class BluetoothPrinter(private val context: Context) {
                     bitmap.eraseColor(Color.WHITE)
                     pdfPage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
 
-                    val extension = if (imageType == PrinterImageType.PNG) "png" else "jpg"
+                    val extension = if (params.imageType == PrinterImageType.PNG) "png" else "jpg"
                     val outFile = File(outputDir, "print_${System.currentTimeMillis()}.$extension")
                     FileOutputStream(outFile).use { fos ->
-                        val format = if (imageType == PrinterImageType.PNG) {
+                        val format = if (params.imageType == PrinterImageType.PNG) {
                             Bitmap.CompressFormat.PNG
                         } else {
                             Bitmap.CompressFormat.JPEG
@@ -265,41 +327,37 @@ class BluetoothPrinter(private val context: Context) {
         }
     }
 
-    /** Renders [pdfPath] to an image (via [pdfToImage]), then prints it. The temp image is deleted afterwards. */
-    fun printPdf(pdfPath: String, printerWidthDots: Int = 384, page: Int = 0, feedLines: Int = 3) {
-        val imagePath = pdfToImage(pdfPath, PrinterImageType.PNG, page, targetWidthPx = printerWidthDots)
+    /** Renders [PrintPdfParams.pdfPath] to an image (via [pdfToImage]), then prints it. The temp image is deleted afterwards. */
+    fun printPdf(params: PrintPdfParams) {
+        val imagePath = pdfToImage(
+            PdfToImageParams(
+                pdfPath = params.pdfPath,
+                imageType = PrinterImageType.PNG,
+                page = params.page,
+                targetWidthPx = params.printerWidthDots
+            )
+        )
         try {
-            printImageFile(imagePath, printerWidthDots, feedLines)
+            printImageFile(PrintImageFileParams(imagePath, params.printerWidthDots, params.feedLines))
         } finally {
             File(imagePath).delete()
         }
     }
 
     /**
-     * Converts [html] to a PDF file using Android's built-in WebView print framework
-     * (see [HtmlToPdf], no external library). WebView requires the main thread, so this
-     * is safe to call from any thread - it hops internally - and [onResult] (the saved
+     * Converts [HtmlToPdfParams.html] to a PDF file using Android's built-in WebView print
+     * framework (see [HtmlToPdf], no external library). WebView requires the main thread, so
+     * this is safe to call from any thread - it hops internally - and [onResult] (the saved
      * PDF's absolute path, or null on failure) always arrives on the main thread.
      *
-     * @param pageWidthDp layout width in dp (CSS px) the HTML is rendered at - controls
-     *   how large text/content look relative to the page, not the final print size
-     *   (that's [printerWidthDots] on [printHtml]/[printPdf], which downscales this).
-     * @param heightDp if set, forces the page to exactly this height (dp) instead of
-     *   auto-measuring the HTML's content height - use this if you already know the
-     *   right height, or want to force a fixed one.
-     * @param minPageHeightDp ignored if [heightDp] is set. Otherwise a height floor in
-     *   dp for auto-measured content - the page normally just fits the real content, so
-     *   this only matters for very short/empty HTML.
+     * See [HtmlToPdfParams] for what its fields control.
      */
-    fun htmlToPdf(
-        html: String,
-        outputPath: String = File(context.cacheDir, "html_${System.currentTimeMillis()}.pdf").absolutePath,
-        pageWidthDp: Int = 412,
-        heightDp: Int? = null,
-        minPageHeightDp: Int = 1000,
-        onResult: (String?) -> Unit
-    ) {
-        HtmlToPdf.convert(context, html, outputPath, pageWidthDp, heightDp, minPageHeightDp) { file ->
+    fun htmlToPdf(params: HtmlToPdfParams, onResult: (String?) -> Unit) {
+        val outputPath = params.outputPath
+            ?: File(context.cacheDir, "html_${System.currentTimeMillis()}.pdf").absolutePath
+        HtmlToPdf.convert(
+            context, params.html, outputPath, params.pageWidthDp, params.heightDp, params.minPageHeightDp
+        ) { file ->
             onResult(file?.absolutePath)
         }
     }
@@ -310,24 +368,24 @@ class BluetoothPrinter(private val context: Context) {
      * step runs on the main thread, then printing runs on a background thread.
      * [onResult] is invoked on a background thread with true/false.
      *
-     * See [htmlToPdf] for what [pageWidthDp]/[heightDp]/[minPageHeightDp] control.
+     * See [PrintHtmlParams] for what its fields control.
      */
-    fun printHtml(
-        html: String,
-        printerWidthDots: Int = 384,
-        pageWidthDp: Int = 412,
-        heightDp: Int? = null,
-        minPageHeightDp: Int = 1000,
-        onResult: (Boolean) -> Unit = {}
-    ) {
-        htmlToPdf(html, pageWidthDp = pageWidthDp, heightDp = heightDp, minPageHeightDp = minPageHeightDp) { pdfPath ->
+    fun printHtml(params: PrintHtmlParams, onResult: (Boolean) -> Unit = {}) {
+        htmlToPdf(
+            HtmlToPdfParams(
+                html = params.html,
+                pageWidthDp = params.pageWidthDp,
+                heightDp = params.heightDp,
+                minPageHeightDp = params.minPageHeightDp
+            )
+        ) { pdfPath ->
             if (pdfPath == null) {
                 onResult(false)
                 return@htmlToPdf
             }
             Thread {
                 try {
-                    printPdf(pdfPath, printerWidthDots)
+                    printPdf(PrintPdfParams(pdfPath, params.printerWidthDots))
                     onResult(true)
                 } catch (e: Exception) {
                     Log.e(TAG, "printHtml failed", e)
@@ -356,7 +414,7 @@ class BluetoothPrinter(private val context: Context) {
             val address = connectedDevice?.address
             Log.w(TAG, "Write to printer failed (${e.message}); reconnecting and retrying once", e)
             closeSocketQuietly()
-            if (address == null || !connectPrinter(address)) {
+            if (address == null || !connectPrinter(ConnectPrinterParams(address))) {
                 throw e
             }
             action()
