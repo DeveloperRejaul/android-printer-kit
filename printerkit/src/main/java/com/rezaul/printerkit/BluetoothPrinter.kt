@@ -47,8 +47,8 @@ data class PrintImageBitmapParams(
     val bitmap: Bitmap,
     val printerWidthDots: Int = 384,
     val feedLines: Int = 3,
-    val bandHeightDots: Int = 64,
-    val bandDelayMs: Long = 40L
+    val bandHeightDots: Int = 32,
+    val bandDelayMs: Long = 50L
 )
 
 /** Parameters for [BluetoothPrinter.printImageFile]. See [PrintImageBitmapParams] for [bandHeightDots]/[bandDelayMs]. */
@@ -56,8 +56,8 @@ data class PrintImageFileParams(
     val imagePath: String,
     val printerWidthDots: Int = 384,
     val feedLines: Int = 3,
-    val bandHeightDots: Int = 64,
-    val bandDelayMs: Long = 40L
+    val bandHeightDots: Int = 32,
+    val bandDelayMs: Long = 50L
 )
 
 /** Parameters for [BluetoothPrinter.printImageBase64]. See [PrintImageBitmapParams] for [bandHeightDots]/[bandDelayMs]. */
@@ -65,8 +65,8 @@ data class PrintImageBase64Params(
     val base64: String,
     val printerWidthDots: Int = 384,
     val feedLines: Int = 3,
-    val bandHeightDots: Int = 64,
-    val bandDelayMs: Long = 40L
+    val bandHeightDots: Int = 32,
+    val bandDelayMs: Long = 50L
 )
 
 /** Parameters for [BluetoothPrinter.pdfToImage]. [outputDir] defaults to the app's cache dir when null. */
@@ -84,8 +84,8 @@ data class PrintPdfParams(
     val printerWidthDots: Int = 384,
     val page: Int = 0,
     val feedLines: Int = 3,
-    val bandHeightDots: Int = 64,
-    val bandDelayMs: Long = 40L
+    val bandHeightDots: Int = 32,
+    val bandDelayMs: Long = 50L
 )
 
 /**
@@ -111,8 +111,8 @@ data class PrintHtmlParams(
     val pageWidthDp: Int = 412,
     val heightDp: Int? = null,
     val minPageHeightDp: Int = 1000,
-    val bandHeightDots: Int = 64,
-    val bandDelayMs: Long = 40L
+    val bandHeightDots: Int = 32,
+    val bandDelayMs: Long = 50L
 )
 
 private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
