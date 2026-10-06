@@ -183,7 +183,8 @@ class BluetoothPrinter(private val context: Context) {
      * adapter can be reported as "turn on Bluetooth" rather than "grant permission".
      */
     fun isBluetoothEnabled(): Boolean {
-        return bluetoothAdapter?.isEnabled == true
+        val manager = context.getSystemService(BluetoothManager::class.java)
+        return manager?.adapter?.isEnabled == true
     }
 
     /**
