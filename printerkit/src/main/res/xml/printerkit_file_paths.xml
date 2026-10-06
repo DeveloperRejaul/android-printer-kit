@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Context.getCacheDir() - e.g. pdfToImage()'s default outputDir. -->
+    <cache-path name="cache" path="." />
+    <!-- Context.getFilesDir() - app-private internal storage. -->
+    <files-path name="files" path="." />
+    <!-- Environment.getExternalStorageDirectory() - covers the public Downloads
+         folder and other shared external storage paths. -->
+    <external-path name="external_storage" path="." />
+    <!-- Context.getExternalFilesDir(null) - app-private external storage. -->
+    <external-files-path name="external_files" path="." />
+    <!-- Context.getExternalCacheDir() - app-private external cache. -->
+    <external-cache-path name="external_cache" path="." />
+</paths>

@@ -13,5 +13,17 @@
             android:name=".BluetoothPrinterService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!-- Used by BluetoothPrinter.openFile() to grant the chosen viewer app
+             read access to a file:// path via a content:// URI. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.printerkit.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/printerkit_file_paths" />
+        </provider>
     </application>
 </manifest>

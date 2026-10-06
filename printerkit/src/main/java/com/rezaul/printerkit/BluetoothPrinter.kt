@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
+import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -17,7 +18,9 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Base64
 import android.util.Log
+import android.webkit.MimeTypeMap
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -509,6 +512,39 @@ class BluetoothPrinter(private val context: Context) {
                     File(pdfPath).delete()
                 }
             }.start()
+        }
+    }
+
+    /**
+     * Opens [path] with whatever app the user has installed that can handle its type
+     * (e.g. a PDF viewer) - the system shows its own app chooser if more than one matches.
+     * [mimeType] is inferred from the file extension when not given. Returns false if the
+     * file doesn't exist or no app on the device can open it.
+     *
+     * Requires the FileProvider this library declares in its manifest to merge into the
+     * consuming app's manifest untouched (the default) - see AndroidManifest.xml.
+     */
+    fun openFile(path: String, mimeType: String? = null): Boolean {
+        val file = File(path)
+        if (!file.exists()) return false
+
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.printerkit.fileprovider", file)
+        val resolvedMimeType = mimeType
+            ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase())
+            ?: "*/*"
+
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, resolvedMimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        return try {
+            context.startActivity(intent)
+            true
+        } catch (e: ActivityNotFoundException) {
+            Log.e(TAG, "No app found to open $path", e)
+            false
         }
     }
 
