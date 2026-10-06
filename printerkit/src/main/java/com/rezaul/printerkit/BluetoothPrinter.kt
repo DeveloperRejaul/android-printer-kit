@@ -177,6 +177,16 @@ class BluetoothPrinter(private val context: Context) {
     }
 
     /**
+     * True if the device's Bluetooth adapter itself is turned on. Unlike
+     * [getBondedBluetoothPrinters], this needs no runtime permission - it's the
+     * right check to run before asking the user to grant one, so a disabled
+     * adapter can be reported as "turn on Bluetooth" rather than "grant permission".
+     */
+    fun isBluetoothEnabled(): Boolean {
+        return bluetoothAdapter?.isEnabled == true
+    }
+
+    /**
      * Returns all Bluetooth devices already paired with this phone/tablet.
      * On Android 12+ this requires the BLUETOOTH_CONNECT runtime permission;
      * if it hasn't been granted, an empty list is returned.
