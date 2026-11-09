@@ -63,7 +63,7 @@ object HtmlToPdf {
     /**
      * @param pageWidthDp layout width in dp (CSS px) the HTML is rendered at - controls
      *   how large text/content look relative to the page, not the final print size
-     *   (that's `printerWidthDots` on [BluetoothPrinter.printHtml]/[BluetoothPrinter.printPdf],
+     *   (that's `printerWidthDots` on [PosPrinter.printHtml]/[PosPrinter.printPdf],
      *   which downscales this).
      * @param heightDp if set, forces the page to exactly this height (dp) and skips
      *   auto-measuring the content - use this if the caller already knows the right

@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.github.DeveloperRejaul"
-version = "0.0.1"
+version = "0.1.0"
 
 android {
     namespace = "com.rezaul.printerkit"
@@ -59,7 +59,7 @@ afterEvaluate {
 
                 groupId = "com.github.DeveloperRejaul"
                 artifactId = "printerkit"
-                version = "0.0.1"
+                version = "0.1.0"
             }
         }
         repositories {

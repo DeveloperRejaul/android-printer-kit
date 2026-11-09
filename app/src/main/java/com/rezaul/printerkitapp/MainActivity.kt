@@ -35,35 +35,39 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.rezaul.printerkitapp.ui.theme.PrinterKitTheme
 import com.rezaul.printerkit.BluetoothPermissions
-import com.rezaul.printerkit.BluetoothPrinter
-import com.rezaul.printerkit.BluetoothPrinterDevice
-import com.rezaul.printerkit.BluetoothPrinterService
-import com.rezaul.printerkit.ConnectPrinterParams
-import com.rezaul.printerkit.HtmlToPdfParams
-import com.rezaul.printerkit.PdfToImageParams
-import com.rezaul.printerkit.PrintHtmlParams
-import com.rezaul.printerkit.PrintImageBase64Params
-import com.rezaul.printerkit.PrintImageBitmapParams
-import com.rezaul.printerkit.PrintImageFileParams
-import com.rezaul.printerkit.PrintPdfParams
-import com.rezaul.printerkit.PrintTextParams
+import com.rezaul.printerkit.PosPrinter
+import com.rezaul.printerkit.PrinterService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import com.rezaul.printerkit.model.BluetoothPrinterDevice
+import com.rezaul.printerkit.model.ConnectPrinterParams
+import com.rezaul.printerkit.model.FileLocation
+import com.rezaul.printerkit.model.PrinterConnectionType
+import com.rezaul.printerkit.model.PrinterFilter
+import com.rezaul.printerkit.model.PrintTextParams
+import com.rezaul.printerkit.model.SaveFileParams
+import com.rezaul.printerkit.model.PrintImageBitmapParams
+import com.rezaul.printerkit.model.PrintImageFileParams
+import com.rezaul.printerkit.model.PrintImageBase64Params
+import com.rezaul.printerkit.model.PdfToImageParams
+import com.rezaul.printerkit.model.PrintPdfParams
+import com.rezaul.printerkit.model.HtmlToPdfParams
+import com.rezaul.printerkit.model.PrintHtmlParams
 
 class MainActivity : ComponentActivity() {
 
-    // The Bluetooth POS printer connection lives in BluetoothPrinterService (not here),
-    // so it survives the app being swiped away from Recents - see BluetoothPrinterService
+    // The Bluetooth POS printer connection lives in PrinterService (not here),
+    // so it survives the app being swiped away from Recents - see PrinterService
     // for why a connection held directly by the Activity can't do that. This state holds
     // the bound service once it's ready; the Compose UI observes it.
-    private var printerService by mutableStateOf<BluetoothPrinterService?>(null)
+    private var printerService by mutableStateOf<PrinterService?>(null)
     private val printerServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            printerService = (binder as BluetoothPrinterService.LocalBinder).getService()
+            printerService = (binder as PrinterService.LocalBinder).getService()
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -113,7 +117,7 @@ class MainActivity : ComponentActivity() {
         // startService (not just bindService) so the service - and any printer
         // connection made through it - keeps running even if the Activity unbinds
         // (e.g. the app is swiped away from Recents), not just while this screen is open.
-        val serviceIntent = Intent(this, BluetoothPrinterService::class.java)
+        val serviceIntent = Intent(this, PrinterService::class.java)
         startService(serviceIntent)
         bindService(serviceIntent, printerServiceConnection, Context.BIND_AUTO_CREATE)
 
@@ -161,20 +165,20 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * A one-screen manual test bench for every [BluetoothPrinter] function:
+ * A one-screen manual test bench for every [PosPrinter] function:
  * pairing/connect, raw text printing, image printing, and the PDF -> image -> print pipeline.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BluetoothPrinterTestScreen(
     modifier: Modifier = Modifier,
-    printerService: BluetoothPrinterService,
+    printerService: PrinterService,
     ensurePermission: ((Boolean) -> Unit) -> Unit,
     showToast: (String) -> Unit,
     cacheDir: File
 ) {
     // The actual connection lives in printerService (a foreground service), so it
-    // survives the app being swiped from Recents - see BluetoothPrinterService.
+    // survives the app being swiped from Recents - see PrinterService.
     // connectPrinter()/disconnectPrinter() go through the service; every other call
     // (printText, printHtml, etc.) uses this shared printer instance as before.
     val printer = printerService.printer
@@ -219,7 +223,7 @@ fun BluetoothPrinterTestScreen(
 
         Spacer(Modifier.height(12.dp))
 
-        // Every button below is named after the exact BluetoothPrinter/BluetoothPermissions function it calls.
+        // Every button below is named after the exact PosPrinter/BluetoothPermissions function it calls.
 
         TestButton(label = "BluetoothPermissions.isGranted(context)", activeAction = activeAction) {
             run("BluetoothPermissions.isGranted(context)") {
@@ -252,6 +256,110 @@ fun BluetoothPrinterTestScreen(
                 } else {
                     showToast("Bluetooth permission denied")
                 }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        TestButton(label = "getBondedBluetoothPrinters(LIKELY_PRINTERS)", activeAction = activeAction) {
+            activeAction = "getBondedBluetoothPrinters(LIKELY_PRINTERS)"
+            ensurePermission { granted ->
+                activeAction = null
+                if (granted) {
+                    devices = printer.getBondedBluetoothPrinters(PrinterFilter.LIKELY_PRINTERS)
+                    showPickerSheet = true
+                } else {
+                    showToast("Bluetooth permission denied")
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        TestButton(label = "getUsbPrinters()", activeAction = activeAction) {
+            run("getUsbPrinters()") {
+                val usb = printer.getUsbPrinters()
+                showToast("getUsbPrinters() = ${usb.joinToString { "${it.name ?: "USB"} (${it.vendorId}:${it.productId})" }.ifEmpty { "none" }}")
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        TestButton(label = "requestUsbPermission(first USB printer)", activeAction = activeAction) {
+            val usb = printer.getUsbPrinters().firstOrNull()
+            if (usb == null) {
+                showToast("No USB printer found")
+            } else {
+                activeAction = "requestUsbPermission(first USB printer)"
+                printer.requestUsbPermission(usb.vendorId, usb.productId) { granted ->
+                    activeAction = null
+                    showToast("USB permission = $granted")
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        TestButton(label = "connectAndKeepAlive(USB)", activeAction = activeAction) {
+            run("connectAndKeepAlive(USB)", onSuccess = { connected = printer.getConnectedPrinter() }) {
+                val usb = printer.getUsbPrinters().firstOrNull() ?: throw IllegalStateException("No USB printer found")
+                val ok = printerService.connectAndKeepAlive(
+                    ConnectPrinterParams(
+                        address = "",
+                        type = PrinterConnectionType.USB,
+                        vendorId = usb.vendorId,
+                        productId = usb.productId
+                    )
+                )
+                if (!ok) throw IllegalStateException("connect returned false (USB permission granted?)")
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        TestButton(label = "isPrinterReady()", activeAction = activeAction) {
+            run("isPrinterReady()") {
+                showToast("isPrinterReady() = ${printer.isPrinterReady()}")
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        TestButton(label = "getPrinterStatus()", activeAction = activeAction) {
+            activeAction = "getPrinterStatus()"
+            status = "getPrinterStatus()..."
+            scope.launch(Dispatchers.IO) {
+                val result = printer.getPrinterStatus()
+                android.util.Log.i("PrinterKitTest", "getPrinterStatus() = ${result.toMap()}")
+                withContext(Dispatchers.Main) {
+                    status = "getPrinterStatus() = ${result.toMap()}"
+                    activeAction = null
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        TestButton(label = "printTestPage()", activeAction = activeAction) {
+            run("printTestPage()") { printer.printTestPage() }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        TestButton(label = "saveFile(test PDF -> Downloads/PrinterKit)", activeAction = activeAction) {
+            run("saveFile(test PDF -> Downloads/PrinterKit)") {
+                val pdf = generateTestPdf(cacheDir)
+                val result = printer.saveFile(
+                    SaveFileParams(
+                        sourcePath = pdf.absolutePath,
+                        fileName = "printerkit_test.pdf",
+                        location = FileLocation.DOWNLOADS,
+                        subFolder = "PrinterKit",
+                        overwrite = true
+                    )
+                )
+                if (!result.success) throw IllegalStateException(result.error)
+                showToast("saveFile() -> ${result.path ?: result.uri}")
             }
         }
 
@@ -479,7 +587,7 @@ private fun PrinterPickerSheetContent(
 
 /**
  * A sample receipt-style HTML/CSS report (Bangla content), for testing
- * [BluetoothPrinter.htmlToPdf] and [BluetoothPrinter.printHtml].
+ * [PosPrinter.htmlToPdf] and [PosPrinter.printHtml].
  */
 private fun sampleTestHtml(): String = """
 <!DOCTYPE html>
@@ -581,21 +689,21 @@ private fun sampleTestHtml(): String = """
 </html>
 """.trimIndent()
 
-/** Saves [bitmap] as a PNG file in [cacheDir], for testing [BluetoothPrinter.printImageFile]. */
+/** Saves [bitmap] as a PNG file in [cacheDir], for testing [PosPrinter.printImageFile]. */
 private fun saveBitmapToFile(bitmap: Bitmap, cacheDir: File): File {
     val file = File(cacheDir, "bt_printer_test_image.png")
     FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     return file
 }
 
-/** Encodes [bitmap] as a base64 PNG string, for testing [BluetoothPrinter.printImageBase64]. */
+/** Encodes [bitmap] as a base64 PNG string, for testing [PosPrinter.printImageBase64]. */
 private fun bitmapToBase64(bitmap: Bitmap): String {
     val stream = ByteArrayOutputStream()
     bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
     return Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
 }
 
-/** Builds a simple black-and-white test bitmap, including Bangla text, for [BluetoothPrinter.printImageBitmap]. */
+/** Builds a simple black-and-white test bitmap, including Bangla text, for [PosPrinter.printImageBitmap]. */
 private fun generateTestBitmap(): Bitmap {
     val width = 384
     val height = 260
@@ -621,7 +729,7 @@ private fun generateTestBitmap(): Bitmap {
     return bitmap
 }
 
-/** Builds a simple one-page PDF, including Bangla text, for [BluetoothPrinter.printPdf]. */
+/** Builds a simple one-page PDF, including Bangla text, for [PosPrinter.printPdf]. */
 private fun generateTestPdf(cacheDir: File): File {
     val document = PdfDocument()
     val pageInfo = PdfDocument.PageInfo.Builder(320, 500, 1).create()

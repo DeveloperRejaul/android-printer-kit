@@ -4,17 +4,19 @@
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application>
         <service
-            android:name=".BluetoothPrinterService"
+            android:name=".PrinterService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
-        <!-- Used by BluetoothPrinter.openFile() to grant the chosen viewer app
+        <!-- Used by PosPrinter.openFile() to grant the chosen viewer app
              read access to a file:// path via a content:// URI. -->
         <provider
             android:name="androidx.core.content.FileProvider"

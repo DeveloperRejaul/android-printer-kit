@@ -14,8 +14,8 @@ import androidx.core.content.ContextCompat
  * Two independent runtime grants are involved, each gating a different thing:
  * - `BLUETOOTH_CONNECT` (Android 12+/API 31) - required to connect to or print on a
  *   paired device at all. [isGranted] checks specifically this one, since it's what
- *   actually gates [BluetoothPrinter]'s core operations.
- * - `POST_NOTIFICATIONS` (Android 13+/API 33) - required for [BluetoothPrinterService]'s
+ *   actually gates [PosPrinter]'s core operations.
+ * - `POST_NOTIFICATIONS` (Android 13+/API 33) - required for [PrinterService]'s
  *   "printer connected" notification to actually be *visible*. Without it, the
  *   foreground service still runs and the connection still survives the app being
  *   swiped from Recents (that protection doesn't depend on the notification being

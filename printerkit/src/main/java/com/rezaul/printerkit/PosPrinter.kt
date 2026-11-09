@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
+import android.app.PendingIntent
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -14,6 +15,9 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
+import android.hardware.usb.UsbConstants
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Base64
@@ -24,110 +28,34 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.util.UUID
-
-/**
- * A paired (bonded) Bluetooth printer.
- */
-data class BluetoothPrinterDevice(
-    val name: String?,
-    val address: String
-)
-
-/**
- * Output image format for [BluetoothPrinter.pdfToImage].
- */
-enum class PrinterImageType { PNG, JPEG }
-
-/** Parameters for [BluetoothPrinter.connectPrinter] / [BluetoothPrinterService.connectAndKeepAlive]. */
-data class ConnectPrinterParams(val address: String)
-
-/** Parameters for [BluetoothPrinter.printText]. */
-data class PrintTextParams(val text: String, val feedLines: Int = 3)
-
-/**
- * Parameters for [BluetoothPrinter.printImageBitmap]. [bandHeightDots]/[bandDelayMs] control
- * how the image is paced to the printer - see [BluetoothPrinter.printImageBitmap] for why.
- * Lower [bandHeightDots] and/or raise [bandDelayMs] for printers with a small receive buffer
- * that drop or garble large images.
- */
-data class PrintImageBitmapParams(
-    val bitmap: Bitmap,
-    val printerWidthDots: Int = 384,
-    val feedLines: Int = 3,
-    val bandHeightDots: Int = 16,
-    val bandDelayMs: Long = 60L
-)
-
-/** Parameters for [BluetoothPrinter.printImageFile]. See [PrintImageBitmapParams] for [bandHeightDots]/[bandDelayMs]. */
-data class PrintImageFileParams(
-    val imagePath: String,
-    val printerWidthDots: Int = 384,
-    val feedLines: Int = 3,
-    val bandHeightDots: Int = 16,
-    val bandDelayMs: Long = 60L
-)
-
-/** Parameters for [BluetoothPrinter.printImageBase64]. See [PrintImageBitmapParams] for [bandHeightDots]/[bandDelayMs]. */
-data class PrintImageBase64Params(
-    val base64: String,
-    val printerWidthDots: Int = 384,
-    val feedLines: Int = 3,
-    val bandHeightDots: Int = 16,
-    val bandDelayMs: Long = 60L
-)
-
-/** Parameters for [BluetoothPrinter.pdfToImage]. [outputDir] defaults to the app's cache dir when null. */
-data class PdfToImageParams(
-    val pdfPath: String,
-    val imageType: PrinterImageType = PrinterImageType.PNG,
-    val page: Int = 0,
-    val targetWidthPx: Int? = null,
-    val outputDir: String? = null
-)
-
-/** Parameters for [BluetoothPrinter.printPdf]. See [PrintImageBitmapParams] for [bandHeightDots]/[bandDelayMs]. */
-data class PrintPdfParams(
-    val pdfPath: String,
-    val printerWidthDots: Int = 384,
-    val page: Int = 0,
-    val feedLines: Int = 3,
-    val bandHeightDots: Int = 16,
-    val bandDelayMs: Long = 60L
-)
-
-/**
- * Parameters for [BluetoothPrinter.htmlToPdf]. [outputPath] defaults to a fresh file
- * under the app's cache dir when null. See [BluetoothPrinter.htmlToPdf] for what
- * [pageWidthDp]/[heightDp]/[minPageHeightDp] control.
- */
-data class HtmlToPdfParams(
-    val html: String,
-    val outputPath: String? = null,
-    val pageWidthDp: Int = 412,
-    val heightDp: Int? = null,
-    val minPageHeightDp: Int = 1000
-)
-
-/**
- * Parameters for [BluetoothPrinter.printHtml]. See [HtmlToPdfParams] for the HTML sizing
- * fields and [PrintImageBitmapParams] for [bandHeightDots]/[bandDelayMs].
- */
-data class PrintHtmlParams(
-    val html: String,
-    val printerWidthDots: Int = 384,
-    val pageWidthDp: Int = 412,
-    val heightDp: Int? = null,
-    val minPageHeightDp: Int = 1000,
-    val bandHeightDots: Int = 16,
-    val bandDelayMs: Long = 60L
-)
+import com.rezaul.printerkit.model.BluetoothPrinterDevice
+import com.rezaul.printerkit.model.PrinterConfidence
+import com.rezaul.printerkit.model.PrinterConnectionType
+import com.rezaul.printerkit.model.PrinterFilter
+import com.rezaul.printerkit.model.PrinterStatus
+import com.rezaul.printerkit.model.UsbPrinterDevice
+import com.rezaul.printerkit.model.PrinterImageType
+import com.rezaul.printerkit.model.ConnectPrinterParams
+import com.rezaul.printerkit.model.PrintTextParams
+import com.rezaul.printerkit.model.SaveFileParams
+import com.rezaul.printerkit.model.SaveFileResult
+import com.rezaul.printerkit.model.PrintImageBitmapParams
+import com.rezaul.printerkit.model.PrintImageFileParams
+import com.rezaul.printerkit.model.PrintImageBase64Params
+import com.rezaul.printerkit.model.PdfToImageParams
+import com.rezaul.printerkit.model.PrintPdfParams
+import com.rezaul.printerkit.model.HtmlToPdfParams
+import com.rezaul.printerkit.model.PrintHtmlParams
 
 private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
 /**
- * Talks to a Bluetooth Classic (SPP) ESC/POS thermal/POS printer that is already
- * paired with the device via Android's Bluetooth settings.
+ * Talks to an ESC/POS thermal/POS printer over Bluetooth Classic (SPP, must already be
+ * paired in Android's Bluetooth settings) or Wi-Fi/LAN (raw TCP, port 9100) - choose with
+ * [ConnectPrinterParams.type]. All printing code is identical for both.
  *
  * Printing is done in two ways:
  * - [printText]: raw ESC/POS text using the printer's built-in font (ASCII only).
@@ -138,15 +66,22 @@ private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34
  * All connection and printing calls perform blocking I/O and must be invoked
  * from a background thread.
  */
-class BluetoothPrinter(private val context: Context) {
+class PosPrinter(private val context: Context) {
 
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
         val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         manager?.adapter
     }
 
-    private var socket: BluetoothSocket? = null
+    private var transport: PrinterTransport? = null
     private var connectedDevice: BluetoothDevice? = null
+    private var connectedUsbName: String? = null
+
+    // Display name captured at connect time: once Bluetooth is off, BluetoothDevice.getName() returns null.
+    private var connectedName: String? = null
+
+    // What the active connection was opened with - used to reconnect after a dropped write, for any connection type.
+    private var activeParams: ConnectPrinterParams? = null
 
     // Remembers the last successfully connected printer's address, so a fresh
     // process (e.g. app reopened after being fully killed) can reconnect to the
@@ -162,19 +97,68 @@ class BluetoothPrinter(private val context: Context) {
     // same as this class's other application-scoped state - there's nothing to leak.
     private val connectionWatcher = object : BroadcastReceiver() {
         override fun onReceive(receivedContext: Context, intent: Intent) {
-            val device = getDeviceExtra(intent) ?: return
-            if (device.address == connectedDevice?.address) {
-                Log.w(TAG, "Printer ${device.address} physically disconnected")
-                closeSocketQuietly()
+            when (intent.action) {
+                BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
+                    val device = getDeviceExtra(intent) ?: return
+                    if (device.address == connectedDevice?.address) {
+                        Log.w(TAG, "Printer ${device.address} physically disconnected")
+                        handleConnectionLost()
+                    }
+                }
+                UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                    // The USB printer was unplugged.
+                    val params = activeParams
+                    if (params?.type == PrinterConnectionType.USB) {
+                        val device = getUsbDeviceExtra(intent)
+                        if (device == null || (device.vendorId == params.vendorId && device.productId == params.productId)) {
+                            Log.w(TAG, "USB printer unplugged")
+                            handleConnectionLost()
+                        }
+                    }
+                }
+                BluetoothAdapter.ACTION_STATE_CHANGED -> {
+                    // Turning Bluetooth off drops the link too, but not always with a per-device ACL broadcast.
+                    val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+                    val bluetoothPrinter = activeParams?.type == PrinterConnectionType.BLUETOOTH
+                    if (bluetoothPrinter && (state == BluetoothAdapter.STATE_TURNING_OFF || state == BluetoothAdapter.STATE_OFF)) {
+                        Log.w(TAG, "Bluetooth turned off while a printer was connected")
+                        handleConnectionLost()
+                    }
+                }
             }
         }
     }
+
+    /**
+     * Called when the connection drops on its own (printer off / out of range, Bluetooth turned off, a
+     * failed write that could not be recovered) - not when the caller disconnects on purpose. Set by
+     * [PrinterService] to replace its "connected" notification. Always invoked on the main thread.
+     * Receives the lost printer's name (null if unknown).
+     */
+    @Volatile
+    var onConnectionLost: ((printerName: String?) -> Unit)? = null
+
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /** Clears the dead connection and tells [onConnectionLost] (once - nothing happens if already disconnected). */
+    private fun handleConnectionLost() {
+        if (transport == null && activeParams == null) return
+        val name = getConnectedPrinterNameOrNull()
+        closeSocketQuietly()
+        val listener = onConnectionLost ?: return
+        mainHandler.post { listener(name) }
+    }
+
+    private fun getConnectedPrinterNameOrNull(): String? = connectedName
 
     init {
         ContextCompat.registerReceiver(
             context,
             connectionWatcher,
-            IntentFilter(BluetoothDevice.ACTION_ACL_DISCONNECTED),
+            IntentFilter(BluetoothDevice.ACTION_ACL_DISCONNECTED).apply {
+                addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+                addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            },
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
     }
@@ -191,18 +175,68 @@ class BluetoothPrinter(private val context: Context) {
     }
 
     /**
-     * Returns all Bluetooth devices already paired with this phone/tablet.
+     * Returns the Bluetooth devices already paired with this phone/tablet (all of them by default, each rated by how much it looks like a printer)
+     * (see [PrinterFilter]; pass [PrinterFilter.LIKELY_PRINTERS] to hide devices that don't look like printers). Bluetooth can't say for
+     * certain what a device is, so each result carries a [BluetoothPrinterDevice.confidence]; use
+     * [extraNameKeywords] to also accept printers whose name doesn't look like one.
      * On Android 12+ this requires the BLUETOOTH_CONNECT runtime permission;
      * if it hasn't been granted, an empty list is returned.
      */
     @SuppressLint("MissingPermission")
-    fun getBondedBluetoothPrinters(): List<BluetoothPrinterDevice> {
+    fun getBondedBluetoothPrinters(
+        filter: PrinterFilter = PrinterFilter.ALL,
+        extraNameKeywords: List<String> = emptyList()
+    ): List<BluetoothPrinterDevice> {
         val adapter = bluetoothAdapter ?: return emptyList()
         return try {
-            adapter.bondedDevices.map { BluetoothPrinterDevice(it.name, it.address) }
+            adapter.bondedDevices
+                .map {
+                    val (confidence, reason) = PrinterClassifier.classify(it, extraNameKeywords)
+                    BluetoothPrinterDevice(it.name, it.address, confidence, reason)
+                }
+                .filter {
+                    when (filter) {
+                        PrinterFilter.ALL -> true
+                        PrinterFilter.LIKELY_PRINTERS -> it.confidence != PrinterConfidence.UNKNOWN
+                        PrinterFilter.STRICT -> it.confidence == PrinterConfidence.CONFIDENT
+                    }
+                }
+                .sortedWith(compareBy({ it.confidence.ordinal }, { it.name ?: "" }))
         } catch (e: SecurityException) {
             Log.e(TAG, "Missing BLUETOOTH_CONNECT permission", e)
             emptyList()
+        }
+    }
+
+    /**
+     * Connects to the printer described by [params] - Bluetooth (default), Wi-Fi/LAN or USB, see
+     * [PrinterConnectionType]. Any existing connection is closed first. Returns true on success.
+     */
+    fun connectPrinter(params: ConnectPrinterParams): Boolean = when (params.type) {
+        PrinterConnectionType.BLUETOOTH -> connectBluetooth(params)
+        PrinterConnectionType.NETWORK -> connectNetwork(params)
+        PrinterConnectionType.USB -> connectUsb(params)
+    }
+
+    /**
+     * Opens a raw TCP socket to a Wi-Fi/LAN printer at [ConnectPrinterParams.address]:[ConnectPrinterParams.port]
+     * (default 9100). The phone must be on the same network as the printer. Returns true on success.
+     */
+    private fun connectNetwork(params: ConnectPrinterParams): Boolean {
+        disconnectPrinter()
+        return try {
+            val tcp = Socket()
+            tcp.tcpNoDelay = true
+            tcp.connect(InetSocketAddress(params.address, params.port), params.timeoutMs)
+            transport = NetworkTransport(tcp)
+            connectedName = params.address
+            activeParams = params
+            saveLastConnection(params)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "network connect failed for ${params.address}:${params.port}", e)
+            closeSocketQuietly()
+            false
         }
     }
 
@@ -215,8 +249,93 @@ class BluetoothPrinter(private val context: Context) {
      * record that makes [BluetoothDevice.createRfcommSocketToServiceRecord] fail or hang
      * even though the printer is reachable, and this fallback is the standard workaround.
      */
+
+    private val usbManager: UsbManager? by lazy { context.getSystemService(Context.USB_SERVICE) as? UsbManager }
+
+    /** USB printers currently plugged in (USB printer class). Needs a phone with USB host / OTG. */
+    fun getUsbPrinters(): List<UsbPrinterDevice> =
+        usbManager?.deviceList?.values.orEmpty()
+            .filter { device -> (0 until device.interfaceCount).any { device.getInterface(it).interfaceClass == UsbConstants.USB_CLASS_PRINTER } }
+            .map { UsbPrinterDevice(it.productName, it.vendorId, it.productId, it.deviceName) }
+
+    /** True if the user already granted this app access to the USB printer. */
+    fun hasUsbPermission(vendorId: Int, productId: Int): Boolean {
+        val device = findUsbDevice(vendorId, productId, null) ?: return false
+        return usbManager?.hasPermission(device) == true
+    }
+
+    /**
+     * Asks the user for permission to use a USB printer (a system dialog). [onResult] is called on the main
+     * thread with whether it was granted; if already granted it is called right away with true.
+     * Connect with [connectPrinter] ([PrinterConnectionType.USB]) after it returns true.
+     */
+    fun requestUsbPermission(vendorId: Int, productId: Int, onResult: (Boolean) -> Unit) {
+        val manager = usbManager
+        val device = findUsbDevice(vendorId, productId, null)
+        if (manager == null || device == null) { onResult(false); return }
+        if (manager.hasPermission(device)) { onResult(true); return }
+
+        val action = "${context.packageName}.printerkit.USB_PERMISSION"
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(receivedContext: Context, intent: Intent) {
+                try { context.unregisterReceiver(this) } catch (_: Exception) {}
+                onResult(intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false))
+            }
+        }
+        ContextCompat.registerReceiver(context, receiver, IntentFilter(action), ContextCompat.RECEIVER_NOT_EXPORTED)
+        // The system fills in the result extras, so the PendingIntent must be mutable on Android 12+.
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+        val pending = PendingIntent.getBroadcast(context, 0, Intent(action).setPackage(context.packageName), flags)
+        manager.requestPermission(device, pending)
+    }
+
+    private fun findUsbDevice(vendorId: Int?, productId: Int?, deviceName: String?): UsbDevice? {
+        val devices = usbManager?.deviceList?.values ?: return null
+        return if (vendorId != null && productId != null)
+            devices.firstOrNull { it.vendorId == vendorId && it.productId == productId }
+        else devices.firstOrNull { it.deviceName == deviceName }
+    }
+
+    /** Opens the bulk-OUT endpoint of a USB printer (needs permission from [requestUsbPermission]). */
+    private fun connectUsb(params: ConnectPrinterParams): Boolean {
+        disconnectPrinter()
+        return try {
+            val manager = usbManager ?: return false
+            val device = findUsbDevice(params.vendorId, params.productId, params.address) ?: run {
+                Log.e(TAG, "USB printer not found (vid=${params.vendorId}, pid=${params.productId})"); return false
+            }
+            if (!manager.hasPermission(device)) {
+                Log.e(TAG, "No USB permission for ${device.deviceName}; call requestUsbPermission() first"); return false
+            }
+            // Prefer the printer-class interface, otherwise any interface that has a bulk OUT endpoint.
+            val interfaces = (0 until device.interfaceCount).map { device.getInterface(it) }
+            val iface = interfaces.firstOrNull { it.interfaceClass == UsbConstants.USB_CLASS_PRINTER && bulkOut(it) != null }
+                ?: interfaces.firstOrNull { bulkOut(it) != null } ?: run {
+                Log.e(TAG, "No bulk OUT endpoint on USB device"); return false
+            }
+            val connection = manager.openDevice(device) ?: return false
+            if (!connection.claimInterface(iface, true)) { connection.close(); return false }
+            val inEp = (0 until iface.endpointCount).map { iface.getEndpoint(it) }
+                .firstOrNull { it.type == UsbConstants.USB_ENDPOINT_XFER_BULK && it.direction == UsbConstants.USB_DIR_IN }
+            transport = UsbTransport(connection, iface, bulkOut(iface)!!, inEp)
+            connectedUsbName = device.productName
+            connectedName = device.productName
+            activeParams = params.copy(vendorId = device.vendorId, productId = device.productId)
+            saveLastConnection(activeParams!!)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "USB connect failed", e)
+            closeSocketQuietly()
+            false
+        }
+    }
+
+    private fun bulkOut(iface: android.hardware.usb.UsbInterface) = (0 until iface.endpointCount)
+        .map { iface.getEndpoint(it) }
+        .firstOrNull { it.type == UsbConstants.USB_ENDPOINT_XFER_BULK && it.direction == UsbConstants.USB_DIR_OUT }
+
     @SuppressLint("MissingPermission")
-    fun connectPrinter(params: ConnectPrinterParams): Boolean {
+    private fun connectBluetooth(params: ConnectPrinterParams): Boolean {
         val adapter = bluetoothAdapter ?: return false
         val wasConnected = isConnectedPrinter()
         disconnectPrinter()
@@ -243,19 +362,21 @@ class BluetoothPrinter(private val context: Context) {
             Log.w(TAG, "cancelDiscovery() skipped (missing BLUETOOTH_SCAN permission)", e)
         }
 
-        if (tryOpenSocket(device) { device.createRfcommSocketToServiceRecord(SPP_UUID) }) return true
+        if (tryOpenSocket(device, params) { device.createRfcommSocketToServiceRecord(SPP_UUID) }) return true
         Log.w(TAG, "SDP-based connect failed for ${params.address}; trying direct RFCOMM channel fallback")
-        return tryOpenSocket(device) { createFallbackRfcommSocket(device) }
+        return tryOpenSocket(device, params) { createFallbackRfcommSocket(device) }
     }
 
     /** Opens [openSocket] and connects it; on success stores it as the active connection. */
-    private fun tryOpenSocket(device: BluetoothDevice, openSocket: () -> BluetoothSocket): Boolean {
+    private fun tryOpenSocket(device: BluetoothDevice, params: ConnectPrinterParams, openSocket: () -> BluetoothSocket): Boolean {
         return try {
             val newSocket = openSocket()
             newSocket.connect()
-            socket = newSocket
+            transport = BluetoothTransport(newSocket)
             connectedDevice = device
-            prefs.edit().putString(KEY_LAST_ADDRESS, device.address).apply()
+            connectedName = device.name
+            activeParams = params
+            saveLastConnection(params)
             true
         } catch (e: Exception) {
             Log.e(TAG, "connect attempt failed for ${device.address}", e)
@@ -277,30 +398,128 @@ class BluetoothPrinter(private val context: Context) {
     /**
      * Reconnects to the printer this device was last successfully connected to
      * (persisted by [connectPrinter]), if any and if not already connected. Intended
-     * to be called once when a fresh process starts (e.g. [BluetoothPrinterService]'s
+     * to be called once when a fresh process starts (e.g. [PrinterService]'s
      * creation) so the app doesn't need the user to re-pick the printer every time it
      * was fully killed and reopened. Returns true if connected (already, or just now).
      */
     fun autoConnectIfAvailable(): Boolean {
         if (isConnectedPrinter()) return true
         val address = prefs.getString(KEY_LAST_ADDRESS, null) ?: return false
-        return connectPrinter(ConnectPrinterParams(address))
+        val type = prefs.getString(KEY_LAST_TYPE, null)
+            ?.let { runCatching { PrinterConnectionType.valueOf(it) }.getOrNull() }
+            ?: PrinterConnectionType.BLUETOOTH
+        val port = prefs.getInt(KEY_LAST_PORT, ConnectPrinterParams.DEFAULT_NETWORK_PORT)
+        val vid = prefs.getInt(KEY_LAST_VID, -1).takeIf { it >= 0 }
+        val pid = prefs.getInt(KEY_LAST_PID, -1).takeIf { it >= 0 }
+        return connectPrinter(ConnectPrinterParams(address, type = type, port = port, vendorId = vid, productId = pid))
     }
 
     /** Closes the current printer connection, if any, and forgets it for [autoConnectIfAvailable]. Safe to call when already disconnected. */
     fun disconnectPrinter() {
         closeSocketQuietly()
-        prefs.edit().remove(KEY_LAST_ADDRESS).apply()
+        prefs.edit().remove(KEY_LAST_ADDRESS).remove(KEY_LAST_TYPE).remove(KEY_LAST_PORT).remove(KEY_LAST_VID).remove(KEY_LAST_PID).apply()
+    }
+
+    private fun saveLastConnection(params: ConnectPrinterParams) {
+        prefs.edit()
+            .putString(KEY_LAST_ADDRESS, params.address)
+            .putString(KEY_LAST_TYPE, params.type.name)
+            .putInt(KEY_LAST_PORT, params.port)
+            .putInt(KEY_LAST_VID, params.vendorId ?: -1)
+            .putInt(KEY_LAST_PID, params.productId ?: -1)
+            .apply()
+    }
+
+
+    /**
+     * True if a printer is connected and accepts bytes right now (sends the ESC/POS "initialize" command).
+     * This catches a printer that is switched off or out of range while the connection still looks open.
+     * It does not check paper or cover - use [getPrinterStatus] for that. Blocking I/O.
+     */
+    fun isPrinterReady(): Boolean {
+        val t = transport ?: return false
+        if (!t.isConnected) return false
+        return try {
+            t.outputStream.write(ESC_INIT)
+            t.outputStream.flush()
+            true
+        } catch (e: IOException) {
+            Log.w(TAG, "isPrinterReady: write failed (${e.message})")
+            false
+        }
+    }
+
+    /**
+     * Asks the printer for its real-time status (ESC/POS `DLE EOT`): online, paper out / near end, cover
+     * open, error. Many cheap printers ignore these requests - then [PrinterStatus.responded] is false and
+     * the fields are null, which means "unknown", not "ok". Blocking I/O, waits up to [timeoutMs] per query.
+     */
+    fun getPrinterStatus(timeoutMs: Int = 800): PrinterStatus {
+        val t = transport
+        if (t == null || !t.isConnected) return PrinterStatus(connected = false, responded = false)
+        return try {
+            val scratch = ByteArray(64)
+            while (t.read(scratch, 0) > 0) { /* drop stale bytes from earlier traffic */ }
+
+            fun query(n: Int): Int? {
+                t.outputStream.write(byteArrayOf(0x10, 0x04, n.toByte()))
+                t.outputStream.flush()
+                val one = ByteArray(1)
+                return if (t.read(one, timeoutMs) == 1) one[0].toInt() and 0xFF else null
+            }
+
+            val printer = query(1) ?: return PrinterStatus(connected = true, responded = false)
+            val offline = query(2)
+            val paper = query(4)
+            PrinterStatus(
+                connected = true,
+                responded = true,
+                online = printer and 0x08 == 0,
+                coverOpen = offline?.let { it and 0x04 != 0 },
+                hasError = offline?.let { it and 0x40 != 0 },
+                paperOut = paper?.let { it and 0x60 != 0 } ?: offline?.let { it and 0x20 != 0 },
+                paperNearEnd = paper?.let { it and 0x0C != 0 }
+            )
+        } catch (e: IOException) {
+            Log.w(TAG, "getPrinterStatus failed (${e.message})")
+            PrinterStatus(connected = false, responded = false)
+        }
+    }
+
+    /** Prints a short ASCII test page (connection type, address, time) to confirm the setup works. */
+    fun printTestPage() {
+        val params = activeParams
+        val printer = getConnectedPrinter()
+        val text = buildString {
+            append("--------------------------------\n")
+            append("      PRINTER TEST PAGE\n")
+            append("--------------------------------\n")
+            append("Connection: ${params?.type ?: "unknown"}\n")
+            append("Printer   : ${printer?.name ?: "-"}\n")
+            append("Address   : ${printer?.address ?: "-"}\n")
+            append("Time      : ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}\n")
+            append("--------------------------------\n")
+            append("If you can read this, printing works.")
+        }
+        printText(PrintTextParams(text, feedLines = 3))
     }
 
     /** True if a printer socket is currently open. */
-    fun isConnectedPrinter(): Boolean = socket?.isConnected == true
+    fun isConnectedPrinter(): Boolean = transport?.isConnected == true
 
     /** The currently connected printer, or null if none. */
     @SuppressLint("MissingPermission")
     fun getConnectedPrinter(): BluetoothPrinterDevice? {
-        val device = connectedDevice ?: return null
         if (!isConnectedPrinter()) return null
+        val params = activeParams ?: return null
+        if (params.type == PrinterConnectionType.NETWORK) {
+            // No device name over TCP; the address field carries the host.
+            return BluetoothPrinterDevice(null, params.address)
+        }
+        if (params.type == PrinterConnectionType.USB) {
+            return BluetoothPrinterDevice(connectedUsbName, "${params.vendorId}:${params.productId}")
+        }
+        val device = connectedDevice ?: return null
         return BluetoothPrinterDevice(device.name, device.address)
     }
 
@@ -310,7 +529,7 @@ class BluetoothPrinter(private val context: Context) {
      */
     fun printText(params: PrintTextParams) {
         writeWithRetry {
-            val out = requireSocket().outputStream
+            val out = requireTransport().outputStream
             out.write(ESC_INIT)
             out.write(params.text.toByteArray(Charsets.US_ASCII))
             out.write(byteArrayOf(0x0A))
@@ -336,7 +555,7 @@ class BluetoothPrinter(private val context: Context) {
         val scaled = scaleToWidth(params.bitmap, params.printerWidthDots)
         try {
             writeWithRetry {
-                val out = requireSocket().outputStream
+                val out = requireTransport().outputStream
                 out.write(ESC_INIT)
                 out.flush()
 
@@ -516,6 +735,13 @@ class BluetoothPrinter(private val context: Context) {
     }
 
     /**
+     * Saves (copies) an existing file - e.g. a PDF from [htmlToPdf] or an image from [pdfToImage] -
+     * to the location described by [params]. Never throws: check [SaveFileResult.success].
+     * Blocking I/O, call from a background thread.
+     */
+    fun saveFile(params: SaveFileParams): SaveFileResult = FileSaver.save(context, params)
+
+    /**
      * Opens [path] with whatever app the user has installed that can handle its type
      * (e.g. a PDF viewer) - the system shows its own app chooser if more than one matches.
      * [mimeType] is inferred from the file extension when not given. Returns false if the
@@ -548,8 +774,8 @@ class BluetoothPrinter(private val context: Context) {
         }
     }
 
-    private fun requireSocket(): BluetoothSocket {
-        return socket ?: throw IllegalStateException("Printer not connected. Call connectPrinter() first.")
+    private fun requireTransport(): PrinterTransport {
+        return transport ?: throw IllegalStateException("Printer not connected. Call connectPrinter() first.")
     }
 
     /**
@@ -562,13 +788,25 @@ class BluetoothPrinter(private val context: Context) {
         try {
             action()
         } catch (e: IOException) {
-            val address = connectedDevice?.address
+            val params = activeParams
             Log.w(TAG, "Write to printer failed (${e.message}); reconnecting and retrying once", e)
+            val name = getConnectedPrinterNameOrNull()
             closeSocketQuietly()
-            if (address == null || !connectPrinter(ConnectPrinterParams(address))) {
+            if (params == null || !connectPrinter(params)) {
+                onConnectionLost?.let { listener -> mainHandler.post { listener(name) } }
                 throw e
             }
             action()
+        }
+    }
+
+    /** Type-safe [UsbManager.EXTRA_DEVICE] extraction across API levels. */
+    private fun getUsbDeviceExtra(intent: Intent): UsbDevice? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
         }
     }
 
@@ -584,12 +822,15 @@ class BluetoothPrinter(private val context: Context) {
 
     private fun closeSocketQuietly() {
         try {
-            socket?.close()
+            transport?.close()
         } catch (e: Exception) {
             Log.e(TAG, "Error closing printer socket", e)
         } finally {
-            socket = null
+            transport = null
             connectedDevice = null
+            connectedUsbName = null
+            connectedName = null
+            activeParams = null
         }
     }
 
@@ -652,9 +893,13 @@ class BluetoothPrinter(private val context: Context) {
     }
 
     companion object {
-        private const val TAG = "BluetoothPrinter"
+        private const val TAG = "PosPrinter"
         private const val PREFS_NAME = "bluetooth_printer_prefs"
         private const val KEY_LAST_ADDRESS = "last_connected_address"
+        private const val KEY_LAST_TYPE = "last_connected_type"
+        private const val KEY_LAST_PORT = "last_connected_port"
+        private const val KEY_LAST_VID = "last_connected_vendor_id"
+        private const val KEY_LAST_PID = "last_connected_product_id"
         private val ESC_INIT = byteArrayOf(0x1B, 0x40) // ESC @ : initialize printer
         private const val RECONNECT_SETTLE_MS = 200L
     }
