@@ -61,13 +61,21 @@ internal class UsbTransport(
     override val outputStream: OutputStream = object : OutputStream() {
         override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
 
+        // bulkTransfer's `offset` parameter is unreliable on some Android/OEM USB host
+        // stacks - a few silently ignore it or send the wrong bytes once offset > 0. Since
+        // ESC/POS raster is one continuous byte stream, a single mis-sent chunk desyncs
+        // everything after it (matches "first part prints fine, the rest is garbage").
+        // Always copying into a fresh zero-offset buffer per chunk sidesteps that class of
+        // bug entirely, at the cost of one small array copy per 4KB chunk.
         override fun write(b: ByteArray, off: Int, len: Int) {
             if (closed) throw IOException("USB printer closed")
             var sent = 0
             while (sent < len) {
                 val chunk = minOf(WRITE_CHUNK, len - sent)
-                val result = connection.bulkTransfer(outEndpoint, b, off + sent, chunk, WRITE_TIMEOUT_MS)
+                val toSend = if (off + sent == 0) b else b.copyOfRange(off + sent, off + sent + chunk)
+                val result = connection.bulkTransfer(outEndpoint, toSend, chunk, WRITE_TIMEOUT_MS)
                 if (result < 0) throw IOException("USB write failed")
+                if (result == 0) throw IOException("USB write stalled (printer not draining its buffer)")
                 sent += result
             }
         }

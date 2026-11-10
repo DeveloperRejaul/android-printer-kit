@@ -517,6 +517,9 @@ class PosPrinter(private val context: Context) {
     /** True if a printer socket is currently open. */
     fun isConnectedPrinter(): Boolean = transport?.isConnected == true
 
+    /** How the currently connected printer is reached, or null if none. See [PrinterConnectionType]. */
+    fun getConnectedPrinterType(): PrinterConnectionType? = activeParams?.type?.takeIf { isConnectedPrinter() }
+
     /** The currently connected printer, or null if none. */
     @SuppressLint("MissingPermission")
     fun getConnectedPrinter(): BluetoothPrinterDevice? {
