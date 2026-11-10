@@ -18,6 +18,7 @@ import android.graphics.pdf.PdfRenderer
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.net.Uri
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Base64
@@ -49,6 +50,7 @@ import com.rezaul.printerkit.model.ConnectPrinterParams
 import com.rezaul.printerkit.model.PrintTextParams
 import com.rezaul.printerkit.model.SaveFileParams
 import com.rezaul.printerkit.model.SaveFileResult
+import com.rezaul.printerkit.model.FileLocation
 import com.rezaul.printerkit.model.PrintImageBitmapParams
 import com.rezaul.printerkit.model.PrintImageFileParams
 import com.rezaul.printerkit.model.PrintImageBase64Params
@@ -689,15 +691,55 @@ class PosPrinter(private val context: Context) {
      * this is safe to call from any thread - it hops internally - and [onResult] (the saved
      * PDF's absolute path, or null on failure) always arrives on the main thread.
      *
+     * If [HtmlToPdfParams.outputPath] points inside the public Downloads/Documents/Pictures
+     * folder, a raw [File] write there would fail on Android 10+ (scoped storage). This is
+     * detected automatically: the PDF is rendered to a private temp file first, then moved into
+     * that public folder via [FileSaver]/MediaStore, and [onResult] gets back the real,
+     * already-saved location - a `content://` Uri on Android 10+, an absolute path below that.
+     *
      * See [HtmlToPdfParams] for what its fields control.
      */
     fun htmlToPdf(params: HtmlToPdfParams, onResult: (String?) -> Unit) {
-        val outputPath = params.outputPath
-            ?: File(context.cacheDir, "html_${System.currentTimeMillis()}.pdf").absolutePath
+        val requestedPath = params.outputPath
+        val publicLocation = requestedPath?.let(::publicLocationFor)
+        val outputPath = if (publicLocation != null) {
+            File(context.cacheDir, "html_${System.currentTimeMillis()}.pdf").absolutePath
+        } else {
+            requestedPath ?: File(context.cacheDir, "html_${System.currentTimeMillis()}.pdf").absolutePath
+        }
         HtmlToPdf.convert(
             context, params.html, outputPath, params.pageWidthDp, params.heightDp, params.minPageHeightDp
         ) { file ->
-            onResult(file?.absolutePath)
+            if (file == null || publicLocation == null) {
+                onResult(file?.absolutePath)
+                return@convert
+            }
+            Thread {
+                val result = FileSaver.save(
+                    context,
+                    SaveFileParams(
+                        sourcePath = file.absolutePath,
+                        fileName = File(requestedPath).name,
+                        location = publicLocation,
+                        overwrite = true,
+                        deleteSource = true
+                    )
+                )
+                mainHandler.post { onResult(if (result.success) result.path ?: result.uri else null) }
+            }.start()
+        }
+    }
+
+    /** Null unless [path] falls inside the public Downloads/Documents/Pictures folder; which [FileLocation] it is otherwise. */
+    private fun publicLocationFor(path: String): FileLocation? {
+        val downloads = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS).absolutePath
+        val documents = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOCUMENTS).absolutePath
+        val pictures = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES).absolutePath
+        return when {
+            path.startsWith(downloads) -> FileLocation.DOWNLOADS
+            path.startsWith(documents) -> FileLocation.DOCUMENTS
+            path.startsWith(pictures) -> FileLocation.PICTURES
+            else -> null
         }
     }
 
@@ -826,20 +868,32 @@ class PosPrinter(private val context: Context) {
     /**
      * Opens [path] with whatever app the user has installed that can handle its type
      * (e.g. a PDF viewer) - the system shows its own app chooser if more than one matches.
-     * [mimeType] is inferred from the file extension when not given. Returns false if the
-     * file doesn't exist or no app on the device can open it.
+     * [mimeType] is inferred from the file extension when not given (falls back to the generic
+     * "any type" mime type for a `content://` [path], since there is no file extension to read). Returns false
+     * if the file doesn't exist (for an absolute path) or no app on the device can open it.
      *
-     * Requires the FileProvider this library declares in its manifest to merge into the
-     * consuming app's manifest untouched (the default) - see AndroidManifest.xml.
+     * [path] is either an absolute file path, or the `content://` Uri [saveFile] returned for
+     * a public-folder destination (Downloads/Documents/Pictures on Android 10+, or a SAF
+     * folder) - that Uri is not a real filesystem path, so it is launched directly instead of
+     * going through [FileProvider]/[File].
+     *
+     * For an absolute path, requires the FileProvider this library declares in its manifest to
+     * merge into the consuming app's manifest untouched (the default) - see AndroidManifest.xml.
      */
     fun openFile(path: String, mimeType: String? = null): Boolean {
-        val file = File(path)
-        if (!file.exists()) return false
-
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.printerkit.fileprovider", file)
-        val resolvedMimeType = mimeType
-            ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase())
-            ?: "*/*"
+        val uri: Uri
+        val resolvedMimeType: String
+        if (path.startsWith("content://")) {
+            uri = Uri.parse(path)
+            resolvedMimeType = mimeType ?: context.contentResolver.getType(uri) ?: "*/*"
+        } else {
+            val file = File(path)
+            if (!file.exists()) return false
+            uri = FileProvider.getUriForFile(context, "${context.packageName}.printerkit.fileprovider", file)
+            resolvedMimeType = mimeType
+                ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase())
+                ?: "*/*"
+        }
 
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, resolvedMimeType)

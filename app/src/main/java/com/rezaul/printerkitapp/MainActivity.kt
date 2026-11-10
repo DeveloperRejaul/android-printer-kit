@@ -371,6 +371,27 @@ fun BluetoothPrinterTestScreen(
 
         Spacer(Modifier.height(8.dp))
 
+        TestButton(label = "saveFile(DOWNLOADS) -> openFile", activeAction = activeAction) {
+            run("saveFile(DOWNLOADS) -> openFile") {
+                val pdf = generateTestPdf(cacheDir)
+                val result = printer.saveFile(
+                    SaveFileParams(
+                        sourcePath = pdf.absolutePath,
+                        fileName = "printerkit_open_test.pdf",
+                        location = FileLocation.DOWNLOADS,
+                        overwrite = true
+                    )
+                )
+                if (!result.success) throw IllegalStateException(result.error)
+                val target = result.path ?: result.uri ?: throw IllegalStateException("no path or uri")
+                val opened = printer.openFile(target, "application/pdf")
+                if (!opened) throw IllegalStateException("openFile($target) returned false")
+                showToast("openFile() opened: $target")
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
         TestButton(label = "saveFile(text + base64 content)", activeAction = activeAction) {
             run("saveFile(text + base64 content)") {
                 val text = printer.saveFile(
@@ -623,6 +644,33 @@ fun BluetoothPrinterTestScreen(
                 activeAction = null
                 status = if (path != null) "htmlToPdf(html): OK" else "htmlToPdf(html) FAILED"
                 showToast("htmlToPdf() -> ${path ?: "null"}")
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // outputPath points straight at the public Downloads folder - no saveFile() call here.
+        // htmlToPdf() should detect that itself (via MediaStore/FileSaver) and hand back the
+        // real, already-saved content:// Uri, which openFile() should then be able to open.
+        TestButton(label = "htmlToPdf(outputPath=DOWNLOADS) -> openFile", activeAction = activeAction) {
+            activeAction = "htmlToPdf(outputPath=DOWNLOADS) -> openFile"
+            status = "htmlToPdf(outputPath=DOWNLOADS)..."
+            val downloads = android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOWNLOADS
+            ).absolutePath
+            printer.htmlToPdf(
+                HtmlToPdfParams(
+                    html = sampleTestHtml(),
+                    outputPath = "$downloads/printerkit_direct_downloads_test.pdf"
+                )
+            ) { path ->
+                activeAction = null
+                if (path == null) {
+                    status = "htmlToPdf(outputPath=DOWNLOADS) FAILED"
+                    return@htmlToPdf
+                }
+                val opened = printer.openFile(path, "application/pdf")
+                status = if (opened) "openFile() opened: $path" else "openFile($path) returned false"
             }
         }
 
