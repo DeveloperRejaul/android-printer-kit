@@ -184,6 +184,22 @@ data class HtmlToPdfParams(
  * Parameters for [PosPrinter.printHtml]. See [HtmlToPdfParams] for the HTML sizing
  * fields and [PrintImageBitmapParams] for [bandHeightDots]/[bandDelayMs].
  */
+/**
+ * Parameters for [com.rezaul.printerkit.PosPrinter.htmlToImage]: [html] rendered like [HtmlToPdfParams] and then turned
+ * into one PNG/JPEG. [outputPath] is the full path of the image to write (folder must exist); null puts a generated
+ * name in the cache folder. [targetWidthPx] is the image width in pixels (null = twice the page width). A very tall
+ * page makes a very large bitmap and can run out of memory, in which case the result is null.
+ */
+data class HtmlToImageParams(
+    val html: String,
+    val outputPath: String? = null,
+    val imageType: PrinterImageType = PrinterImageType.PNG,
+    val targetWidthPx: Int? = null,
+    val pageWidthDp: Int = 412,
+    val heightDp: Int? = null,
+    val minPageHeightDp: Int = 1000
+)
+
 data class PrintHtmlParams(
     val html: String,
     val printerWidthDots: Int = 384,

@@ -19,6 +19,12 @@ enum class FileLocation {
     DOCUMENTS,
 
     /**
+     * Public Pictures folder, so the image also shows up in the Gallery app. **Images only** (the file's
+     * type must be `image/...`, e.g. a `.png` or `.jpg` name); anything else is refused.
+     */
+    PICTURES,
+
+    /**
      * A folder chosen by the caller via [SaveFileParams.customFolder]: either a
      * `content://` tree Uri string (from the system folder picker / SAF) or an absolute directory path.
      */
@@ -40,14 +46,16 @@ enum class FileLocation {
  * @param deleteSource delete [sourcePath] after a successful save (move instead of copy).
  */
 data class SaveFileParams(
-    val sourcePath: String,
+    val sourcePath: String? = null,
     val fileName: String? = null,
     val location: FileLocation = FileLocation.DOWNLOADS,
     val customFolder: String? = null,
     val subFolder: String? = null,
     val mimeType: String? = null,
     val overwrite: Boolean = false,
-    val deleteSource: Boolean = false
+    val deleteSource: Boolean = false,
+    val text: String? = null,
+    val base64: String? = null
 )
 
 /**
@@ -68,5 +76,128 @@ data class SaveFileResult(
         "uri" to uri,
         "fileName" to fileName,
         "error" to error
+    )
+}
+
+/**
+ * Parameters for [com.rezaul.printerkit.PosPrinter.removeFile]. [path] is an absolute file path, or a
+ * `content://` Uri such as the `uri` that `saveFile` returned for a file in Downloads/Documents.
+ */
+data class RemoveFileParams(
+    val path: String
+)
+
+/** Result of `removeFile`. Never thrown: check [success]. [toMap] is bridge-friendly. */
+data class RemoveFileResult(
+    val success: Boolean,
+    val path: String? = null,
+    val uri: String? = null,
+    val fileName: String? = null,
+    val error: String? = null
+) {
+    fun toMap(): Map<String, Any?> = mapOf(
+        "success" to success,
+        "path" to path,
+        "uri" to uri,
+        "fileName" to fileName,
+        "error" to error
+    )
+}
+
+/**
+ * Parameters for [com.rezaul.printerkit.PosPrinter.readDir]. [path] is an absolute folder path, or a `content://`
+ * Uri of a folder the user picked with the system folder picker (or a sub-folder `path` returned by an earlier call).
+ */
+data class ReadDirParams(
+    val path: String
+)
+
+/** One file or folder inside a listed folder. [path] can be passed to `removeFile` (files) or `readDir` (folders). */
+data class DirEntry(
+    val name: String,
+    val path: String,
+    val isDirectory: Boolean,
+    val sizeBytes: Long? = null,
+    val lastModified: Long? = null
+) {
+    fun toMap(): Map<String, Any?> = mapOf(
+        "name" to name, "path" to path, "isDirectory" to isDirectory,
+        "sizeBytes" to sizeBytes, "lastModified" to lastModified
+    )
+}
+
+/**
+ * Result of `readDir`: the entries of ONE folder (not recursive), folders first and then A-Z. Never thrown: check
+ * [success]. [names] is just the names, in the same order. [toMap] is bridge-friendly.
+ */
+data class ReadDirResult(
+    val success: Boolean,
+    val path: String? = null,
+    val entries: List<DirEntry> = emptyList(),
+    val error: String? = null
+) {
+    val names: List<String> get() = entries.map { it.name }
+
+    fun toMap(): Map<String, Any?> = mapOf(
+        "success" to success, "path" to path, "names" to names,
+        "entries" to entries.map { it.toMap() }, "error" to error
+    )
+}
+
+/** The shape [com.rezaul.printerkit.PosPrinter.readFile] hands the file's content back in. */
+enum class ReadFileFormat(val wireName: String) {
+    /** Plain base64 text (no line breaks): for images, PDFs and any binary file. */
+    BASE64("base64"),
+
+    /** `data:<type>;base64,<base64>`, with the type taken from the file extension: ready for an `<img>` or an upload. */
+    DATA_URI("dataUri"),
+
+    /** The file decoded as text (UTF-8 unless an `encoding` is given). Meaningless for binary files. */
+    TEXT("text"),
+
+    /** Lower-case hex digits, two per byte. */
+    HEX("hex"),
+
+    /** The raw bytes as numbers 0..255. Heavy for big files, so it is limited to 1 MB. */
+    BYTES("bytes");
+
+    companion object {
+        fun fromWireName(name: String?): ReadFileFormat? = entries.firstOrNull { it.wireName == name }
+    }
+}
+
+/**
+ * Parameters for [com.rezaul.printerkit.PosPrinter.readFile]. [path] is an absolute file path, or a `content://` Uri
+ * such as the `uri` `saveFile` returned. [encoding] only matters for [ReadFileFormat.TEXT] (e.g. "UTF-8",
+ * "UTF-16", "ISO-8859-1"). Files bigger than [maxBytes] are refused instead of being loaded into memory.
+ */
+data class ReadFileParams(
+    val path: String,
+    val format: ReadFileFormat = ReadFileFormat.BASE64,
+    val encoding: String? = null,
+    val maxBytes: Long = DEFAULT_MAX_BYTES
+) {
+    companion object {
+        const val DEFAULT_MAX_BYTES = 10L * 1024 * 1024
+        const val MAX_BYTES_FOR_BYTES_FORMAT = 1L * 1024 * 1024
+    }
+}
+
+/**
+ * Result of `readFile`. Exactly one of [content] (base64, dataUri, text, hex) or [bytes] is set on success.
+ * Never thrown: check [success]. [toMap] is bridge-friendly.
+ */
+data class ReadFileResult(
+    val success: Boolean,
+    val format: ReadFileFormat? = null,
+    val content: String? = null,
+    val bytes: List<Int>? = null,
+    val sizeBytes: Long? = null,
+    val mimeType: String? = null,
+    val error: String? = null
+) {
+    fun toMap(): Map<String, Any?> = mapOf(
+        "success" to success, "format" to format?.wireName, "content" to content, "bytes" to bytes,
+        "sizeBytes" to sizeBytes, "mimeType" to mimeType, "error" to error
     )
 }

@@ -47,7 +47,13 @@ import com.rezaul.printerkit.model.BluetoothPrinterDevice
 import com.rezaul.printerkit.model.ConnectPrinterParams
 import com.rezaul.printerkit.model.FileLocation
 import com.rezaul.printerkit.model.PrinterConnectionType
+import com.rezaul.printerkit.model.ReadDirParams
+import com.rezaul.printerkit.model.ReadFileFormat
+import com.rezaul.printerkit.model.ReadFileParams
+import com.rezaul.printerkit.model.HtmlToImageParams
+import com.rezaul.printerkit.model.PrinterImageType
 import com.rezaul.printerkit.model.PrinterFilter
+import com.rezaul.printerkit.model.RemoveFileParams
 import com.rezaul.printerkit.model.PrintTextParams
 import com.rezaul.printerkit.model.SaveFileParams
 import com.rezaul.printerkit.model.PrintImageBitmapParams
@@ -360,6 +366,164 @@ fun BluetoothPrinterTestScreen(
                 )
                 if (!result.success) throw IllegalStateException(result.error)
                 showToast("saveFile() -> ${result.path ?: result.uri}")
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        TestButton(label = "saveFile(text + base64 content)", activeAction = activeAction) {
+            run("saveFile(text + base64 content)") {
+                val text = printer.saveFile(
+                    SaveFileParams(
+                        text = "name,qty\nতেল,2\nচাল,5\n", // Bangla on purpose: must survive as UTF-8
+                        fileName = "printerkit_content.csv",
+                        subFolder = "PrinterKit",
+                        overwrite = true
+                    )
+                )
+                if (!text.success) throw IllegalStateException("text: ${text.error}")
+                // 1x1 transparent PNG, given as a data: URI to exercise the prefix handling too.
+                val png = printer.saveFile(
+                    SaveFileParams(
+                        base64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+                        fileName = "printerkit_pixel.png",
+                        subFolder = "PrinterKit",
+                        overwrite = true
+                    )
+                )
+                if (!png.success) throw IllegalStateException("base64: ${png.error}")
+                // The same image into the Gallery (Pictures); a non-image there must be refused.
+                val gallery = printer.saveFile(
+                    SaveFileParams(
+                        base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+                        fileName = "printerkit_pixel.png",
+                        location = FileLocation.PICTURES,
+                        subFolder = "PrinterKit",
+                        overwrite = true
+                    )
+                )
+                if (!gallery.success) throw IllegalStateException("PICTURES: ${gallery.error}")
+                val notImage = printer.saveFile(
+                    SaveFileParams(text = "x", fileName = "notes.txt", location = FileLocation.PICTURES)
+                )
+                if (notImage.success) throw IllegalStateException("a .txt in PICTURES should have been refused")
+                // Giving two sources, or none, must be refused with a clear message.
+                val both = printer.saveFile(SaveFileParams(text = "x", base64 = "eA==", fileName = "x.txt"))
+                if (both.success) throw IllegalStateException("two sources should have been refused")
+                showToast("saved text + png; two sources refused: ${both.error}")
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        TestButton(label = "saveFile -> removeFile", activeAction = activeAction) {
+            run("saveFile -> removeFile") {
+                // 1) a file in the app's own folder: path round trip
+                val saved = printer.saveFile(
+                    SaveFileParams(text = "delete me", fileName = "to_remove.txt", location = FileLocation.APP_FILES, overwrite = true)
+                )
+                if (!saved.success) throw IllegalStateException("save: ${saved.error}")
+                val removedPath = printer.removeFile(RemoveFileParams(path = saved.path!!))
+                if (!removedPath.success) throw IllegalStateException("remove(path): ${removedPath.error}")
+                if (java.io.File(saved.path!!).exists()) throw IllegalStateException("file still exists after removeFile")
+                // 2) a file in public Downloads: content:// Uri round trip (MediaStore)
+                val pub = printer.saveFile(
+                    SaveFileParams(text = "delete me too", fileName = "to_remove_public.txt", subFolder = "PrinterKit", overwrite = true)
+                )
+                if (!pub.success) throw IllegalStateException("save(public): ${pub.error}")
+                val removedUri = printer.removeFile(RemoveFileParams(path = pub.path ?: pub.uri!!))
+                if (!removedUri.success) throw IllegalStateException("remove(uri): ${removedUri.error}")
+                // 3) things that must be refused
+                val missing = printer.removeFile(RemoveFileParams(path = saved.path!!))
+                val folder = printer.removeFile(RemoveFileParams(path = context.filesDir.absolutePath))
+                val relative = printer.removeFile(RemoveFileParams(path = "to_remove.txt"))
+                if (missing.success || folder.success || relative.success) throw IllegalStateException("a bad input was accepted")
+                if (!context.filesDir.exists()) throw IllegalStateException("the folder was deleted!")
+                showToast("removed path+uri; refused: missing / folder / relative")
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        TestButton(label = "readDir(path)", activeAction = activeAction) {
+            run("readDir(path)") {
+                val root = java.io.File(context.filesDir, "list_test")
+                root.deleteRecursively()
+                root.mkdirs()
+                java.io.File(root, "b.txt").writeText("bb")
+                java.io.File(root, "A.txt").writeText("a")
+                java.io.File(root, "sub").mkdirs()
+                java.io.File(root, "Zeta").mkdirs()
+                try {
+                    val r = printer.readDir(ReadDirParams(root.absolutePath))
+                    if (!r.success) throw IllegalStateException("list: ${r.error}")
+                    // Folders first (A-Z, ignoring case), then files (A-Z, ignoring case).
+                    val expected = listOf("sub", "Zeta", "A.txt", "b.txt")
+                    if (r.names != expected) throw IllegalStateException("wrong names/order: ${r.names}")
+                    val a = r.entries.first { it.name == "A.txt" }
+                    if (a.isDirectory || a.sizeBytes != 1L) throw IllegalStateException("bad entry for A.txt: $a")
+                    if (!r.entries.first { it.name == "sub" }.isDirectory) throw IllegalStateException("sub not a folder")
+                    // Things that must be refused:
+                    val onFile = printer.readDir(ReadDirParams(java.io.File(root, "A.txt").absolutePath))
+                    val missing = printer.readDir(ReadDirParams(java.io.File(root, "nope").absolutePath))
+                    val relative = printer.readDir(ReadDirParams("list_test"))
+                    if (onFile.success || missing.success || relative.success) throw IllegalStateException("a bad input was accepted")
+                    showToast("listed ${r.names}; refused file / missing / relative")
+                } finally {
+                    root.deleteRecursively()
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        TestButton(label = "readFile(all formats) + htmlToImage", activeAction = activeAction) {
+            run("readFile(all formats) + htmlToImage") {
+                val f = java.io.File(context.cacheDir, "readfile_test.bin")
+                val bytes = byteArrayOf(0x50, 0x4B, 0x03, 0x04, 0xFF.toByte(), 0x00, 0x7F)
+                f.writeBytes(bytes)
+                val bangla = java.io.File(context.cacheDir, "readfile_bangla.txt").apply { writeText("বাংলা লেখা ✓") }
+                val utf16 = java.io.File(context.cacheDir, "readfile_utf16.txt").apply { writeText("héllo", Charsets.UTF_16) }
+                try {
+                    fun read(file: java.io.File, format: ReadFileFormat, encoding: String? = null, max: Long = 10_000_000L) =
+                        printer.readFile(ReadFileParams(file.absolutePath, format, encoding, max))
+                    val b64 = read(f, ReadFileFormat.BASE64)
+                    if (!b64.success || !android.util.Base64.decode(b64.content, android.util.Base64.DEFAULT).contentEquals(bytes))
+                        throw IllegalStateException("base64 round trip failed: ${b64.error}")
+                    val uri = read(f, ReadFileFormat.DATA_URI)
+                    if (uri.content?.startsWith("data:application/octet-stream;base64,") != true) throw IllegalStateException("dataUri: ${uri.content}")
+                    val hex = read(f, ReadFileFormat.HEX)
+                    if (hex.content != "504b0304ff007f") throw IllegalStateException("hex: ${hex.content}")
+                    val raw = read(f, ReadFileFormat.BYTES)
+                    if (raw.bytes != listOf(80, 75, 3, 4, 255, 0, 127)) throw IllegalStateException("bytes: ${raw.bytes}")
+                    val txt = read(bangla, ReadFileFormat.TEXT)
+                    if (txt.content != "বাংলা লেখা ✓") throw IllegalStateException("text: ${txt.content}")
+                    val u16 = read(utf16, ReadFileFormat.TEXT, "UTF-16")
+                    if (u16.content != "héllo") throw IllegalStateException("utf-16 text: ${u16.content}")
+                    // Things that must be refused:
+                    if (read(f, ReadFileFormat.BASE64, max = 3).success) throw IllegalStateException("over-limit file accepted")
+                    if (read(f, ReadFileFormat.TEXT, "no-such-charset").success) throw IllegalStateException("bad encoding accepted")
+                    if (printer.readFile(ReadFileParams("readfile_test.bin")).success) throw IllegalStateException("relative path accepted")
+                    if (printer.readFile(ReadFileParams(context.cacheDir.absolutePath)).success) throw IllegalStateException("folder accepted")
+                } finally {
+                    f.delete(); bangla.delete(); utf16.delete()
+                }
+                // htmlToImage: result arrives on the main thread, so wait for it here on the IO thread.
+                val latch = java.util.concurrent.CountDownLatch(1)
+                var imagePath: String? = null
+                val target = java.io.File(context.cacheDir, "h2i_named.png").absolutePath
+                printer.htmlToImage(
+                    HtmlToImageParams(
+                        html = "<html><body style='font-size:28px'><h1>PrinterKit</h1><p>বাংলা টেস্ট</p></body></html>",
+                        outputPath = target, imageType = PrinterImageType.PNG, targetWidthPx = 600
+                    )
+                ) { imagePath = it; latch.countDown() }
+                if (!latch.await(60, java.util.concurrent.TimeUnit.SECONDS)) throw IllegalStateException("htmlToImage timed out")
+                if (imagePath != target) throw IllegalStateException("asked for $target, got $imagePath")
+                val head = printer.readFile(ReadFileParams(target, ReadFileFormat.HEX, maxBytes = 50_000_000L)).content.orEmpty()
+                java.io.File(target).delete()
+                if (!head.startsWith("89504e470d0a1a0a")) throw IllegalStateException("not a PNG: ${head.take(16)}")
+                showToast("readFile: 5 formats + limits OK; htmlToImage wrote a real PNG")
             }
         }
 

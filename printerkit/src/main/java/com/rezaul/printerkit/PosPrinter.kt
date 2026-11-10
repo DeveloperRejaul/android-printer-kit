@@ -35,7 +35,14 @@ import com.rezaul.printerkit.model.BluetoothPrinterDevice
 import com.rezaul.printerkit.model.PrinterConfidence
 import com.rezaul.printerkit.model.PrinterConnectionType
 import com.rezaul.printerkit.model.PrinterFilter
+import com.rezaul.printerkit.model.ReadDirParams
+import com.rezaul.printerkit.model.ReadFileParams
+import com.rezaul.printerkit.model.ReadFileResult
+import com.rezaul.printerkit.model.HtmlToImageParams
+import com.rezaul.printerkit.model.ReadDirResult
 import com.rezaul.printerkit.model.PrinterStatus
+import com.rezaul.printerkit.model.RemoveFileParams
+import com.rezaul.printerkit.model.RemoveFileResult
 import com.rezaul.printerkit.model.UsbPrinterDevice
 import com.rezaul.printerkit.model.PrinterImageType
 import com.rezaul.printerkit.model.ConnectPrinterParams
@@ -695,6 +702,56 @@ class PosPrinter(private val context: Context) {
     }
 
     /**
+     * Converts [HtmlToImageParams.html] to ONE PNG/JPEG image: [htmlToPdf], then the PDF page is rendered with
+     * [pdfToImage] on a background thread and the temporary PDF is removed. [onResult] (the image's absolute path, or
+     * null on failure) arrives on the main thread, like [htmlToPdf]. A very tall page needs a very large bitmap; if
+     * the device runs out of memory the result is null (and the app keeps running).
+     */
+    fun htmlToImage(params: HtmlToImageParams, onResult: (String?) -> Unit) {
+        val tempPdf = File(context.cacheDir, "h2i_${System.nanoTime()}.pdf")
+        htmlToPdf(
+            HtmlToPdfParams(
+                html = params.html,
+                outputPath = tempPdf.absolutePath,
+                pageWidthDp = params.pageWidthDp,
+                heightDp = params.heightDp,
+                minPageHeightDp = params.minPageHeightDp
+            )
+        ) { pdfPath ->
+            if (pdfPath == null) {
+                onResult(null)
+                return@htmlToPdf
+            }
+            Thread {
+                var result: String? = null
+                try {
+                    val rendered = File(
+                        pdfToImage(
+                            PdfToImageParams(
+                                pdfPath = pdfPath, imageType = params.imageType, page = 0,
+                                targetWidthPx = params.targetWidthPx
+                            )
+                        )
+                    )
+                    val target = params.outputPath?.let { File(it) }
+                    result = if (target == null) rendered.absolutePath else {
+                        rendered.copyTo(target, overwrite = true)
+                        rendered.delete()
+                        target.absolutePath
+                    }
+                } catch (e: OutOfMemoryError) {
+                    Log.e(TAG, "htmlToImage: page too large for memory", e)
+                } catch (e: Exception) {
+                    Log.e(TAG, "htmlToImage failed", e)
+                } finally {
+                    File(pdfPath).delete()
+                }
+                mainHandler.post { onResult(result) }
+            }.start()
+        }
+    }
+
+    /**
      * Full pipeline: [htmlToPdf] -> [printPdf]. Since [htmlToPdf] needs the main thread
      * and printing does blocking Bluetooth I/O, this is callback-based: the HTML->PDF
      * step runs on the main thread, then printing runs on a background thread.
@@ -740,6 +797,31 @@ class PosPrinter(private val context: Context) {
      * Blocking I/O, call from a background thread.
      */
     fun saveFile(params: SaveFileParams): SaveFileResult = FileSaver.save(context, params)
+
+    /**
+     * Deletes one file that [saveFile] (or anything else) wrote. [RemoveFileParams.path] is an absolute path or the
+     * `content://` Uri that [saveFile] returned. Deletes a single file only - never a folder, never a pattern - and
+     * cannot be undone. Never throws: check [RemoveFileResult.success]. For a MediaStore Uri (Downloads/Documents on
+     * Android 10+) only files this app created can be deleted.
+     */
+    fun removeFile(params: RemoveFileParams): RemoveFileResult = FileSaver.remove(context, params)
+
+    /**
+     * Lists the files and folders directly inside one folder: [ReadDirParams.path] is an absolute path, or a
+     * `content://` Uri of a folder picked with the system folder picker. Not recursive. Read-only. Folders come first,
+     * then A-Z. Each entry's `path` can be given to [removeFile] (a file) or to [readDir] again (a folder). Never
+     * throws: check [ReadDirResult.success]. A public folder such as Downloads may not be readable on Android 10+;
+     * then the result explains that.
+     */
+    fun readDir(params: ReadDirParams): ReadDirResult = FileSaver.readDir(context, params)
+
+    /**
+     * Reads ONE file - an absolute path, or the `content://` Uri `saveFile` returned - and gives its content back in the
+     * shape asked for by [ReadFileParams.format]: base64, a `data:` URI, text, hex or raw bytes. Read-only. A file over
+     * [ReadFileParams.maxBytes] (default 10 MB; 1 MB for raw bytes) is refused rather than loaded. Never throws: check
+     * [ReadFileResult.success]. Blocking I/O: call it from a background thread.
+     */
+    fun readFile(params: ReadFileParams): ReadFileResult = FileSaver.read(context, params)
 
     /**
      * Opens [path] with whatever app the user has installed that can handle its type

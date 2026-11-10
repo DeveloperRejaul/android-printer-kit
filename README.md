@@ -65,7 +65,7 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("com.github.DeveloperRejaul:android-printer-kit:v0.1.0")
+    implementation("com.github.DeveloperRejaul:android-printer-kit:v0.1.1")
 }
 ```
 
@@ -135,6 +135,10 @@ Every function that takes data (anything beyond a bare callback) takes a single 
 | `htmlToPdf(params: HtmlToPdfParams, onResult: (String?) -> Unit)` | Renders HTML to a PDF file using an off-screen `WebView` (no external library). **Must be called from any thread — it hops to the main thread internally; `onResult` always fires on the main thread.** |
 | `printHtml(params: PrintHtmlParams, onResult: (Boolean) -> Unit = {})` | Full pipeline: `htmlToPdf` → `printPdf`. `onResult` fires on a background thread. |
 | `saveFile(params: SaveFileParams): SaveFileResult` | Copies a finished file (e.g. the PDF from `htmlToPdf`) to cache, app storage, public Downloads/Documents or a chosen folder. Never throws — check `result.success`. See [Saving files](#saving-files). |
+| `removeFile(params: RemoveFileParams): RemoveFileResult` | Deletes **one** file: an absolute path, or the `content://` Uri `saveFile` returned. Never a folder, never a pattern; cannot be undone. Never throws — check `result.success`. See [Saving files](#saving-files). |
+| `readDir(params: ReadDirParams): ReadDirResult` | Lists the files and folders directly inside **one** folder (absolute path, or a folder `content://` Uri from the system folder picker). Not recursive, read-only, folders first then A–Z. Each entry has `name`, `path`, `isDirectory`, `sizeBytes`, `lastModified`; `result.names` is just the names. Never throws — check `result.success`. See [Saving files](#saving-files). |
+| `readFile(params: ReadFileParams): ReadFileResult` | Reads **one** file (absolute path, or the `content://` Uri `saveFile` returned) and returns its content as `BASE64`, `DATA_URI`, `TEXT`, `HEX` or `BYTES`. Read-only. Refuses a file over `maxBytes` (default 10 MB; 1 MB for `BYTES`). Never throws — check `result.success`. Blocking I/O: call from a background thread. |
+| `htmlToImage(params: HtmlToImageParams, onResult: (String?) -> Unit)` | `htmlToPdf` + one PDF page rendered to a PNG/JPEG, temp PDF removed. `onResult` (the image path, or `null`) arrives on the main thread. A very tall page can run out of memory → `null`. |
 | `openFile(path: String, mimeType: String? = null): Boolean` | Opens a file with an installed viewer app. |
 
 **Params data classes:**
@@ -266,18 +270,64 @@ data class PrinterStatus(
 enum class PrinterConnectionType { BLUETOOTH, NETWORK, USB }
 enum class PrinterFilter { ALL, LIKELY_PRINTERS, STRICT }
 enum class PrinterImageType { PNG, JPEG }
-enum class FileLocation { CACHE, APP_FILES, DOWNLOADS, DOCUMENTS, CUSTOM_FOLDER }
+enum class FileLocation { CACHE, APP_FILES, DOWNLOADS, DOCUMENTS, PICTURES, CUSTOM_FOLDER }
 
 data class SaveFileParams(
-    val sourcePath: String,
-    val fileName: String? = null,        // defaults to the source file's name
+    val sourcePath: String? = null,      // an existing file ... OR give the content directly with text / base64
+    val fileName: String? = null,        // defaults to the source file's name; REQUIRED with text / base64
     val location: FileLocation = FileLocation.DOWNLOADS,
     val customFolder: String? = null,    // required for CUSTOM_FOLDER: a content:// tree Uri string or a directory path
     val subFolder: String? = null,
     val mimeType: String? = null,        // guessed from the extension when null
     val overwrite: Boolean = false,
-    val deleteSource: Boolean = false
+    val deleteSource: Boolean = false,   // only for sourcePath
+    val text: String? = null,            // content to save as UTF-8 text (instead of sourcePath)
+    val base64: String? = null           // content to save as bytes, base64 encoded (instead of sourcePath)
 )
+
+enum class ReadFileFormat { BASE64, DATA_URI, TEXT, HEX, BYTES }
+
+data class ReadFileParams(
+    val path: String,                              // absolute path, or a content:// Uri
+    val format: ReadFileFormat = ReadFileFormat.BASE64,
+    val encoding: String? = null,                  // TEXT only, e.g. "UTF-16"; default UTF-8
+    val maxBytes: Long = 10L * 1024 * 1024         // BYTES is always capped at 1 MB
+)
+
+data class ReadFileResult(
+    val success: Boolean, val format: ReadFileFormat? = null,
+    val content: String? = null,                   // BASE64 / DATA_URI / TEXT / HEX
+    val bytes: List<Int>? = null,                  // BYTES, each 0..255
+    val sizeBytes: Long? = null, val mimeType: String? = null, val error: String? = null
+) { fun toMap(): Map<String, Any?> }
+
+data class HtmlToImageParams(
+    val html: String,
+    val outputPath: String? = null,                // full path incl. name; null = generated name in cache
+    val imageType: PrinterImageType = PrinterImageType.PNG,
+    val targetWidthPx: Int? = null,                // null = twice the page width
+    val pageWidthDp: Int = 412, val heightDp: Int? = null, val minPageHeightDp: Int = 1000
+)
+
+data class ReadDirParams(val path: String) // absolute folder path, or a folder content:// Uri
+
+data class DirEntry(
+    val name: String, val path: String, val isDirectory: Boolean,
+    val sizeBytes: Long? = null,   // null for a folder
+    val lastModified: Long? = null // epoch millis, null if unknown
+)
+
+data class ReadDirResult(
+    val success: Boolean, val path: String? = null,
+    val entries: List<DirEntry> = emptyList(), val error: String? = null
+) { val names: List<String>; fun toMap(): Map<String, Any?> }
+
+data class RemoveFileParams(val path: String) // absolute path, or a content:// Uri
+
+data class RemoveFileResult(
+    val success: Boolean, val path: String? = null, val uri: String? = null,
+    val fileName: String? = null, val error: String? = null
+) { fun toMap(): Map<String, Any?> }
 
 data class SaveFileResult(
     val success: Boolean, val path: String? = null, val uri: String? = null,
@@ -353,9 +403,64 @@ val result = printer.saveFile(
     SaveFileParams(sourcePath = pdfPath, fileName = "invoice.pdf", location = FileLocation.DOWNLOADS, subFolder = "MyApp")
 )
 if (result.success) printer.openFile(result.path ?: result.uri!!)
+
+// No file yet? Give the content directly - text, or base64 for binary data (a "data:...;base64," prefix is fine).
+printer.saveFile(SaveFileParams(text = csvString, fileName = "report.csv", subFolder = "MyApp"))
+printer.saveFile(SaveFileParams(base64 = pngBase64, fileName = "qr.png", location = FileLocation.DOCUMENTS))
 ```
 
+To delete a file again, pass what `saveFile` gave you to `removeFile`:
+
+```kotlin
+val saved = printer.saveFile(SaveFileParams(text = "temp", fileName = "tmp.txt"))
+val removed = printer.removeFile(RemoveFileParams(path = saved.path ?: saved.uri!!))
+if (!removed.success) Log.w("App", removed.error ?: "")
+```
+
+To get a file's content back (for an upload, an `<img>`, a hash...), use `readFile`; the format decides the shape:
+
+```kotlin
+val r = printer.readFile(ReadFileParams(path = pngPath, format = ReadFileFormat.BASE64))
+if (r.success) upload(r.content!!)                       // "iVBORw0KGgo..."
+printer.readFile(ReadFileParams(pngPath, ReadFileFormat.DATA_URI)).content  // "data:image/png;base64,iVBOR..."
+printer.readFile(ReadFileParams(txtPath, ReadFileFormat.TEXT, encoding = "UTF-16")).content
+printer.readFile(ReadFileParams(binPath, ReadFileFormat.HEX)).content        // "504b0304..."
+printer.readFile(ReadFileParams(binPath, ReadFileFormat.BYTES)).bytes        // [80, 75, 3, 4, ...] (max 1 MB)
+```
+
+`path` may be an absolute path or the `content://` Uri `saveFile` returned. The whole file is loaded into memory, so a file over `maxBytes` (default 10 MB) is refused with a clear message instead; `BYTES` is capped at 1 MB because a number per byte is heavy. `TEXT` only makes sense for text files.
+
+HTML straight to an image, then to base64 or the Gallery:
+
+```kotlin
+printer.htmlToImage(HtmlToImageParams(html = receiptHtml, imageType = PrinterImageType.PNG)) { imagePath ->  // main thread
+    if (imagePath == null) return@htmlToImage
+    Thread {
+        val b64 = printer.readFile(ReadFileParams(imagePath, ReadFileFormat.BASE64)).content
+        printer.saveFile(SaveFileParams(sourcePath = imagePath, fileName = "receipt.png", location = FileLocation.PICTURES))
+    }.start()
+}
+```
+
+To see what is in a folder, give its path to `readDir`:
+
+```kotlin
+val r = printer.readDir(ReadDirParams(path = filesDir.absolutePath))
+if (r.success) {
+    r.names                       // ["reports", "logo.png", "notes.txt"]  - folders first, then A-Z
+    r.entries.forEach { e -> Log.d("App", "${e.name} dir=${e.isDirectory} size=${e.sizeBytes}") }
+    // every entry's path works with removeFile (a file) or with readDir again (a folder)
+}
+```
+
+`readDir` reads **one** folder, not its sub-folders (call it again with a sub-folder's `path` to go deeper). It cannot list a path that is a file or does not exist, and refuses a relative path. Android 10+ restricts reading public folders such as Downloads, so for those the result may say the folder cannot be read; app-private folders and a folder picked with the system folder picker always work.
+
+`removeFile` deletes a single file only: a folder is refused, nothing is expanded or matched, and a relative path is refused. A missing file is reported as a failure ("File not found"), which you can ignore if you only wanted it gone. On Android 10+ a MediaStore Uri (a file in Downloads/Documents) can only be deleted if this app created it; for others the result explains that it was not allowed.
+
+Provide **exactly one** of `sourcePath`, `text` or `base64`, otherwise the result is a failure. With `text` / `base64` the `fileName` is required (there is no source file to take a name from), and the content type is guessed from its extension. The content is written to a temporary file first and removed afterwards, so large content briefly needs that much cache space.
+
 - `CACHE` / `APP_FILES`: app-private folders (cache may be cleared by the system).
+- `PICTURES`: the public Pictures folder, so the image also appears in the **Gallery** app. **Images only**: the file name must end in an image extension (`.png`, `.jpg`, ...) or `mimeType` must be `image/...`; anything else is refused with a clear message.
 - `DOWNLOADS` / `DOCUMENTS`: public folders visible in the Files app. Android 10+ uses MediaStore (no permission needed); Android 9 and below needs `WRITE_EXTERNAL_STORAGE`.
 - `CUSTOM_FOLDER`: a folder the user picked with the system folder picker (`content://` tree Uri string) or an absolute directory path.
 - With `overwrite = false` an existing file is an error for plain paths and auto-renamed by the system for Downloads/Documents on Android 10+. `overwrite = true` can only replace files this app created.
