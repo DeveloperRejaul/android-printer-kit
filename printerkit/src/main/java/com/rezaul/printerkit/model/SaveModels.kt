@@ -144,6 +144,40 @@ data class ReadDirResult(
     )
 }
 
+/**
+ * Real, absolute paths for common storage locations on this device. Returned by
+ * [com.rezaul.printerkit.PosPrinter.getDirectoryPaths]. Mirrors the `DocumentDirectoryPath`/
+ * `CachesDirectoryPath`-style constants of other file-path libraries.
+ *
+ * [cache], [appFiles], [externalFiles] and [externalCache] are app-private: a plain file path into any
+ * of them is writable directly, no permission needed, on every Android version - safe to use directly
+ * as [com.rezaul.printerkit.model.HtmlToPdfParams.outputPath].
+ *
+ * [downloads], [documents] and [pictures] are the public folders. A raw write there still fails on
+ * Android 10+ (scoped storage) - but [com.rezaul.printerkit.PosPrinter.htmlToPdf] detects an
+ * `outputPath` under one of these and routes it through MediaStore automatically, and
+ * [com.rezaul.printerkit.PosPrinter.saveFile] does the same for any file.
+ */
+data class DirectoryPaths(
+    val cache: String,
+    val appFiles: String,
+    val externalFiles: String?,
+    val externalCache: String?,
+    val downloads: String,
+    val documents: String,
+    val pictures: String
+) {
+    fun toMap(): Map<String, Any?> = mapOf(
+        "CACHE" to cache,
+        "APP_FILES" to appFiles,
+        "EXTERNAL_FILES" to externalFiles,
+        "EXTERNAL_CACHE" to externalCache,
+        "DOWNLOADS" to downloads,
+        "DOCUMENTS" to documents,
+        "PICTURES" to pictures
+    )
+}
+
 /** The shape [com.rezaul.printerkit.PosPrinter.readFile] hands the file's content back in. */
 enum class ReadFileFormat(val wireName: String) {
     /** Plain base64 text (no line breaks): for images, PDFs and any binary file. */

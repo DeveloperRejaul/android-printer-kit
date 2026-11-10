@@ -51,6 +51,7 @@ import com.rezaul.printerkit.model.PrintTextParams
 import com.rezaul.printerkit.model.SaveFileParams
 import com.rezaul.printerkit.model.SaveFileResult
 import com.rezaul.printerkit.model.FileLocation
+import com.rezaul.printerkit.model.DirectoryPaths
 import com.rezaul.printerkit.model.PrintImageBitmapParams
 import com.rezaul.printerkit.model.PrintImageFileParams
 import com.rezaul.printerkit.model.PrintImageBase64Params
@@ -732,16 +733,17 @@ class PosPrinter(private val context: Context) {
 
     /** Null unless [path] falls inside the public Downloads/Documents/Pictures folder; which [FileLocation] it is otherwise. */
     private fun publicLocationFor(path: String): FileLocation? {
-        val downloads = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS).absolutePath
-        val documents = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOCUMENTS).absolutePath
-        val pictures = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES).absolutePath
+        val dirs = FileSaver.directoryPaths(context)
         return when {
-            path.startsWith(downloads) -> FileLocation.DOWNLOADS
-            path.startsWith(documents) -> FileLocation.DOCUMENTS
-            path.startsWith(pictures) -> FileLocation.PICTURES
+            path.startsWith(dirs.downloads) -> FileLocation.DOWNLOADS
+            path.startsWith(dirs.documents) -> FileLocation.DOCUMENTS
+            path.startsWith(dirs.pictures) -> FileLocation.PICTURES
             else -> null
         }
     }
+
+    /** Real, absolute paths for common storage locations on this device. See [DirectoryPaths]. */
+    fun getDirectoryPaths(): DirectoryPaths = FileSaver.directoryPaths(context)
 
     /**
      * Converts [HtmlToImageParams.html] to ONE PNG/JPEG image: [htmlToPdf], then the PDF page is rendered with

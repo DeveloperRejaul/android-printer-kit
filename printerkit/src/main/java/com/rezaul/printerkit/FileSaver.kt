@@ -10,6 +10,7 @@ import android.provider.MediaStore
 import android.util.Base64
 import android.webkit.MimeTypeMap
 import com.rezaul.printerkit.model.DirEntry
+import com.rezaul.printerkit.model.DirectoryPaths
 import com.rezaul.printerkit.model.ReadDirParams
 import com.rezaul.printerkit.model.ReadDirResult
 import com.rezaul.printerkit.model.ReadFileFormat
@@ -26,6 +27,17 @@ import java.io.OutputStream
 
 /** Copies a finished file to the destination described by [SaveFileParams]. Internal: use [PosPrinter.saveFile]. */
 internal object FileSaver {
+
+    /** Real, absolute paths for common storage locations. See [DirectoryPaths]. */
+    fun directoryPaths(context: Context): DirectoryPaths = DirectoryPaths(
+        cache = context.cacheDir.absolutePath,
+        appFiles = context.filesDir.absolutePath,
+        externalFiles = context.getExternalFilesDir(null)?.absolutePath,
+        externalCache = context.externalCacheDir?.absolutePath,
+        downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath,
+        documents = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS).absolutePath,
+        pictures = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES).absolutePath
+    )
 
     fun save(context: Context, params: SaveFileParams): SaveFileResult {
         // Content given directly (text / base64) is written to a temp file first, so every destination below
